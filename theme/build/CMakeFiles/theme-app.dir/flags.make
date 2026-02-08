@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/home/anisur/Projects/hypr/theme/src -isystem /usr/include/pixman-1 -isystem /usr/include/libdrm -isystem /usr/include/freetype2 -isystem /usr/include/libpng16 -isystem /usr/include/cairo -isystem /usr/include/pango-1.0 -isystem /usr/include/harfbuzz -isystem /usr/include/glib-2.0 -isystem /usr/lib/glib-2.0/include -isystem /usr/include/libmount -isystem /usr/include/blkid -isystem /usr/include/fribidi -isystem /usr/include/sysprof-6 -isystem /usr/include/gdk-pixbuf-2.0 -isystem /usr/include/glycin-2 -isystem /usr/include/gio-unix-2.0
+CXX_INCLUDES = -I/home/anisur/Projects/hyprland-tools/theme/src -isystem /usr/include/pixman-1 -isystem /usr/include/libdrm -isystem /usr/include/freetype2 -isystem /usr/include/libpng16 -isystem /usr/include/cairo -isystem /usr/include/pango-1.0 -isystem /usr/include/harfbuzz -isystem /usr/include/glib-2.0 -isystem /usr/lib/glib-2.0/include -isystem /usr/include/libmount -isystem /usr/include/blkid -isystem /usr/include/fribidi -isystem /usr/include/sysprof-6 -isystem /usr/include/gdk-pixbuf-2.0 -isystem /usr/include/glycin-2 -isystem /usr/include/gio-unix-2.0
 
 CXX_FLAGS = -std=c++23 -Wall -Wextra -Wno-unused-parameter -Wno-unused-value -Wno-missing-field-initializers -Wpedantic -O3 -pthread
 

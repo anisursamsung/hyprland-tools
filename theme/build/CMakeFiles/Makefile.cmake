@@ -7,7 +7,7 @@ set(CMAKE_DEPENDS_GENERATOR "Unix Makefiles")
 # The top level Makefile was generated from the following files:
 set(CMAKE_MAKEFILE_DEPENDS
   "CMakeCache.txt"
-  "/home/anisur/Projects/hypr/theme/CMakeLists.txt"
+  "/home/anisur/Projects/hyprland-tools/theme/CMakeLists.txt"
   "CMakeFiles/4.2.3/CMakeCCompiler.cmake"
   "CMakeFiles/4.2.3/CMakeCXXCompiler.cmake"
   "CMakeFiles/4.2.3/CMakeSystem.cmake"

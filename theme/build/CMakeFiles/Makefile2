@@ -54,10 +54,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/anisur/Projects/hypr/theme
+CMAKE_SOURCE_DIR = /home/anisur/Projects/hyprland-tools/theme
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/anisur/Projects/hypr/theme/build
+CMAKE_BINARY_DIR = /home/anisur/Projects/hyprland-tools/theme/build
 
 #=============================================================================
 # Directory level rules for the build root directory
@@ -85,14 +85,14 @@ clean: CMakeFiles/theme-app.dir/clean
 CMakeFiles/theme-app.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/theme-app.dir/build.make CMakeFiles/theme-app.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/theme-app.dir/build.make CMakeFiles/theme-app.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/anisur/Projects/hypr/theme/build/CMakeFiles --progress-num=1,2 "Built target theme-app"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/anisur/Projects/hyprland-tools/theme/build/CMakeFiles --progress-num=1,2 "Built target theme-app"
 .PHONY : CMakeFiles/theme-app.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/theme-app.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/anisur/Projects/hypr/theme/build/CMakeFiles 2
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/anisur/Projects/hyprland-tools/theme/build/CMakeFiles 2
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/theme-app.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/anisur/Projects/hypr/theme/build/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/anisur/Projects/hyprland-tools/theme/build/CMakeFiles 0
 .PHONY : CMakeFiles/theme-app.dir/rule
 
 # Convenience name for target.
@@ -102,7 +102,7 @@ theme-app: CMakeFiles/theme-app.dir/rule
 # codegen rule for target.
 CMakeFiles/theme-app.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/theme-app.dir/build.make CMakeFiles/theme-app.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/anisur/Projects/hypr/theme/build/CMakeFiles --progress-num=1,2 "Finished codegen for target theme-app"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/anisur/Projects/hyprland-tools/theme/build/CMakeFiles --progress-num=1,2 "Finished codegen for target theme-app"
 .PHONY : CMakeFiles/theme-app.dir/codegen
 
 # clean rule for target.

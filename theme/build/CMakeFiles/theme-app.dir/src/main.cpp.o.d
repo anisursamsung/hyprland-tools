@@ -1,6 +1,6 @@
 CMakeFiles/theme-app.dir/src/main.cpp.o: \
- /home/anisur/Projects/hypr/theme/src/main.cpp /usr/include/stdc-predef.h \
- /usr/include/hyprtoolkit/core/Backend.hpp \
+ /home/anisur/Projects/hyprland-tools/theme/src/main.cpp \
+ /usr/include/stdc-predef.h /usr/include/hyprtoolkit/core/Backend.hpp \
  /usr/include/hyprutils/memory/SharedPtr.hpp \
  /usr/include/c++/15.2.1/cstdint \
  /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/c++config.h \
