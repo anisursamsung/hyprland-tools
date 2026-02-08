@@ -1,0 +1,7 @@
+/home/anisur/Projects/hypr/teditor/build/CMakeFiles/teditor.dir
+/home/anisur/Projects/hypr/teditor/build/CMakeFiles/edit_cache.dir
+/home/anisur/Projects/hypr/teditor/build/CMakeFiles/rebuild_cache.dir
+/home/anisur/Projects/hypr/teditor/build/CMakeFiles/list_install_components.dir
+/home/anisur/Projects/hypr/teditor/build/CMakeFiles/install.dir
+/home/anisur/Projects/hypr/teditor/build/CMakeFiles/install/local.dir
+/home/anisur/Projects/hypr/teditor/build/CMakeFiles/install/strip.dir

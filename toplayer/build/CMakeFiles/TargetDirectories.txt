@@ -1,0 +1,3 @@
+/home/anisur/Projects/hypr_app/toplayer/build/CMakeFiles/toplayer.dir
+/home/anisur/Projects/hypr_app/toplayer/build/CMakeFiles/edit_cache.dir
+/home/anisur/Projects/hypr_app/toplayer/build/CMakeFiles/rebuild_cache.dir

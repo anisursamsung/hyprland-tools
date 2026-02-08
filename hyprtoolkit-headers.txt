@@ -1,0 +1,1761 @@
+=== core/Backend.hpp ===
+
+#pragma once
+
+#include <hyprutils/memory/SharedPtr.hpp>
+#include <hyprutils/memory/Atomic.hpp>
+#include <hyprutils/cli/Logger.hpp>
+#include <aquamarine/backend/Null.hpp>
+#include <aquamarine/backend/Backend.hpp>
+#include <functional>
+#include <expected>
+#include <string>
+#include <sys/poll.h>
+
+#include "LogTypes.hpp"
+#include "SessionLock.hpp"
+#include "../palette/Palette.hpp"
+
+#include "CoreMacros.hpp"
+
+namespace Hyprtoolkit {
+    class IWindow;
+    class IOutput;
+    class CTimer;
+    class ISystemIconFactory;
+    struct SWindowCreationData;
+
+    class IBackend {
+      public:
+        virtual ~IBackend();
+
+        using LogFn = std::function<void(eLogLevel, const std::string&)>;
+
+        struct SBackendCreationData {
+            explicit SBackendCreationData();
+
+            Hyprutils::Memory::CSharedPointer<Hyprutils::CLI::CLoggerConnection> pLogConnection;
+        };
+
+        /*
+            Create a backend.
+            There can only be one backend per process: In case of another create(),
+            it will fail.
+        */
+        static Hyprutils::Memory::CSharedPointer<IBackend> create();
+        static Hyprutils::Memory::CSharedPointer<IBackend> createWithData(const SBackendCreationData& data);
+
+        /*
+            Destroy the backend.
+            Backend will be destroyed once:
+             - All refs YOU hold are dead
+             - You call this fn
+        */
+        virtual void destroy() = 0;
+
+        virtual void setLogFn(LogFn&& fn) = 0;
+
+        /* These are non-owning. */
+        virtual void addFd(int fd, std::function<void()>&& callback) = 0;
+        virtual void removeFd(int fd)                                = 0;
+
+        /*
+            Get the system icon factory object,
+            from which you can lookup icons.
+        */
+        virtual Hyprutils::Memory::CSharedPointer<ISystemIconFactory> systemIcons() = 0;
+
+        /*
+            Add a timer func. This will return a pointer, but the pointer doesn't need
+            to be kept.
+        */
+        virtual Hyprutils::Memory::CAtomicSharedPointer<CTimer> addTimer(const std::chrono::system_clock::duration&                                            timeout,
+                                                                         std::function<void(Hyprutils::Memory::CAtomicSharedPointer<CTimer> self, void* data)> cb_, void* data,
+                                                                         bool force = false) = 0;
+
+        /*
+            Add an idle func. This fn will be executed as soon as possible, but
+            after every pending event
+        */
+        virtual void addIdle(const std::function<void()>& fn) = 0;
+
+        /*
+            Enter the loop.
+        */
+        virtual void                                        enterLoop() = 0;
+
+        virtual Hyprutils::Memory::CSharedPointer<CPalette> getPalette() = 0;
+
+        /*
+            Get currently registered outputs.
+            Make sure you register the `removed` event to get rid of your reference once the output is removed.
+        */
+        virtual std::vector<Hyprutils::Memory::CSharedPointer<IOutput>> getOutputs() = 0;
+
+        /*
+            Create and lock the graphical session.
+            It is required to call this before HT_WINDOW_LOCK_SURFACE can be used.
+        */
+        virtual std::expected<Hyprutils::Memory::CSharedPointer<ISessionLockState>, eSessionLockError> aquireSessionLock() = 0;
+
+        struct {
+            /*
+                Get notified when a new output was added.
+            */
+            Hyprutils::Signal::CSignalT<Hyprutils::Memory::CSharedPointer<IOutput>> outputAdded;
+        } m_events;
+
+      protected:
+        IBackend();
+    };
+};
+
+--- END OF: core/Backend.hpp ---
+
+
+=== core/CoreMacros.hpp ===
+
+#pragma once
+
+#ifndef HT_HIDDEN
+#define HT_HIDDEN private
+#endif
+
+--- END OF: core/CoreMacros.hpp ---
+
+
+=== core/Input.hpp ===
+
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+namespace Hyprtoolkit::Input {
+    enum eMouseButton : uint8_t {
+        MOUSE_BUTTON_UNKNOWN,
+        MOUSE_BUTTON_LEFT,
+        MOUSE_BUTTON_RIGHT,
+        MOUSE_BUTTON_MIDDLE,
+    };
+
+    enum eAxisAxis : uint8_t {
+        AXIS_AXIS_HORIZONTAL,
+        AXIS_AXIS_VERTICAL,
+    };
+
+    enum eKeyboardModifier : uint8_t {
+        HT_MODIFIER_SHIFT = (1 << 0),
+        HT_MODIFIER_CAPS  = (1 << 1),
+        HT_MODIFIER_CTRL  = (1 << 2),
+        HT_MODIFIER_ALT   = (1 << 3),
+        HT_MODIFIER_MOD2  = (1 << 4),
+        HT_MODIFIER_MOD3  = (1 << 5),
+        HT_MODIFIER_META  = (1 << 6),
+        HT_MODIFIER_MOD5  = (1 << 7),
+
+        HT_MODIFIER_CTRL_SHIFT = HT_MODIFIER_CTRL | HT_MODIFIER_SHIFT,
+    };
+
+    struct SKeyboardKeyEvent {
+        uint32_t    xkbKeysym = 0;
+        bool        down      = true;
+        bool        repeat    = false;
+        std::string utf8      = "";
+        uint32_t    modMask   = 0; // eKeyboardModifier
+    };
+}
+
+--- END OF: core/Input.hpp ---
+
+
+=== core/LogTypes.hpp ===
+
+#pragma once
+
+#include <cstdint>
+
+namespace Hyprtoolkit {
+    enum eLogLevel : uint8_t {
+        HT_LOG_TRACE = 0,
+        HT_LOG_DEBUG,
+        HT_LOG_WARNING,
+        HT_LOG_ERROR,
+        HT_LOG_CRITICAL,
+    };
+}
+
+--- END OF: core/LogTypes.hpp ---
+
+
+=== core/Output.hpp ===
+
+#pragma once
+
+#include <hyprutils/signal/Signal.hpp>
+#include <hyprutils/math/Vector2D.hpp>
+
+namespace Hyprtoolkit {
+    class IOutput {
+      public:
+        virtual ~IOutput()           = default;
+        virtual uint32_t    handle() = 0;
+        virtual std::string port()   = 0;
+        virtual std::string desc()   = 0;
+        virtual uint32_t    fps()    = 0;
+
+        struct {
+            /* output removed */
+            Hyprutils::Signal::CSignalT<> removed;
+        } m_events;
+    };
+}
+
+--- END OF: core/Output.hpp ---
+
+
+=== core/SessionLock.hpp ===
+
+#pragma once
+
+#include <hyprutils/signal/Signal.hpp>
+#include <hyprutils/math/Vector2D.hpp>
+
+namespace Hyprtoolkit {
+    enum eSessionLockError : uint8_t {
+        LOCK_ERROR_PLATFORM_UNINITIALIZED,
+        LOCK_ERROR_DENIED,
+    };
+
+    class ISessionLockState {
+      public:
+        virtual ~ISessionLockState() = default;
+        virtual void unlock()        = 0;
+
+        struct {
+            /* signals that we don't need to unlock anymore. It makes sense to exit upon recieving this */
+            Hyprutils::Signal::CSignalT<> finished;
+        } m_events;
+    };
+}
+
+--- END OF: core/SessionLock.hpp ---
+
+
+=== core/Timer.hpp ===
+
+#pragma once
+
+#include <chrono>
+#include <functional>
+#include <hyprutils/memory/Atomic.hpp>
+
+namespace Hyprtoolkit {
+    class CTimer {
+      public:
+        CTimer(std::chrono::steady_clock::duration timeout, std::function<void(Hyprutils::Memory::CAtomicSharedPointer<CTimer> self, void* data)> cb_, void* data_, bool force);
+
+        void  cancel();
+        bool  passed();
+        bool  canForceUpdate();
+        void  updateTimeout(std::chrono::steady_clock::duration timeout);
+
+        float leftMs();
+
+        bool  cancelled();
+        void  call(Hyprutils::Memory::CAtomicSharedPointer<CTimer> self);
+
+      private:
+        std::function<void(Hyprutils::Memory::CAtomicSharedPointer<CTimer> self, void* data)> m_cb;
+        void*                                                                                 m_data = nullptr;
+        std::chrono::steady_clock::time_point                                                 m_expires;
+        bool                                                                                  m_wasCancelled     = false;
+        bool                                                                                  m_allowForceUpdate = false;
+    };
+}
+
+--- END OF: core/Timer.hpp ---
+
+
+=== element/Button.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+#include "../types/FontTypes.hpp"
+
+#include <hyprgraphics/color/Color.hpp>
+#include <hyprutils/memory/UniquePtr.hpp>
+
+#include <functional>
+
+namespace Hyprtoolkit {
+
+    struct SButtonImpl;
+    class CButtonElement;
+    struct SButtonData;
+
+    class CButtonBuilder {
+      public:
+        ~CButtonBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CButtonBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder>        label(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder>        noBorder(bool);
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder>        noBg(bool);
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder>        alignText(eFontAlignment);
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder>        fontFamily(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder>        fontSize(CFontSize&&);
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder>        onMainClick(std::function<void(Hyprutils::Memory::CSharedPointer<CButtonElement>)>&&);
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder>        onRightClick(std::function<void(Hyprutils::Memory::CSharedPointer<CButtonElement>)>&&);
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CButtonElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CButtonBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SButtonData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CButtonElement> m_element;
+
+        CButtonBuilder() = default;
+
+        friend class CButtonElement;
+    };
+
+    class CButtonElement : public IElement {
+      public:
+        virtual ~CButtonElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CButtonBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                 size();
+
+      private:
+        CButtonElement(const SButtonData& data);
+        static Hyprutils::Memory::CSharedPointer<CButtonElement> create(const SButtonData& data);
+
+        void                                                     replaceData(const SButtonData& data);
+
+        virtual void                                             paint();
+        virtual void                                             reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>         preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>         minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>         maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                             acceptsMouseInput();
+        virtual ePointerShape                                    pointerShape();
+        virtual bool                                             positioningDependsOnChild();
+
+        Hyprutils::Memory::CUniquePointer<SButtonImpl>           m_impl;
+
+        friend class CButtonBuilder;
+    };
+};
+
+--- END OF: element/Button.hpp ---
+
+
+=== element/Checkbox.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+
+#include <hyprgraphics/color/Color.hpp>
+#include <hyprutils/memory/UniquePtr.hpp>
+
+#include <functional>
+
+namespace Hyprtoolkit {
+
+    struct SCheckboxImpl;
+    struct SCheckboxData;
+    class CCheckboxElement;
+
+    class CCheckboxBuilder {
+      public:
+        ~CCheckboxBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CCheckboxBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CCheckboxBuilder>        onToggled(std::function<void(Hyprutils::Memory::CSharedPointer<CCheckboxElement>, bool)>&&);
+        Hyprutils::Memory::CSharedPointer<CCheckboxBuilder>        toggled(bool);
+        Hyprutils::Memory::CSharedPointer<CCheckboxBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CCheckboxElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CCheckboxBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SCheckboxData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CCheckboxElement> m_element;
+
+        CCheckboxBuilder() = default;
+
+        friend class CCheckboxElement;
+    };
+
+    class CCheckboxElement : public IElement {
+      public:
+        virtual ~CCheckboxElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CCheckboxBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                   size();
+        bool                                                state();
+        void                                                setState(bool state);
+
+      private:
+        CCheckboxElement(const SCheckboxData& data);
+        static Hyprutils::Memory::CSharedPointer<CCheckboxElement> create(const SCheckboxData& data);
+
+        void                                                       replaceData(const SCheckboxData& data);
+
+        virtual void                                               paint();
+        virtual void                                               reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>           preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>           minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>           maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                               acceptsMouseInput();
+        virtual ePointerShape                                      pointerShape();
+        virtual bool                                               positioningDependsOnChild();
+
+        Hyprutils::Memory::CUniquePointer<SCheckboxImpl>           m_impl;
+
+        friend class CCheckboxBuilder;
+    };
+};
+
+--- END OF: element/Checkbox.hpp ---
+
+
+=== element/ColumnLayout.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+
+namespace Hyprtoolkit {
+
+    struct SColumnLayoutData;
+    struct SColumnLayoutImpl;
+    class CColumnLayoutElement;
+
+    class CColumnLayoutBuilder {
+      public:
+        ~CColumnLayoutBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CColumnLayoutBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CColumnLayoutBuilder>        gap(size_t gap);
+        Hyprutils::Memory::CSharedPointer<CColumnLayoutBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CColumnLayoutElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CColumnLayoutBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SColumnLayoutData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CColumnLayoutElement> m_element;
+
+        CColumnLayoutBuilder() = default;
+
+        friend class CColumnLayoutElement;
+    };
+
+    class CColumnLayoutElement : public IElement {
+      public:
+        virtual ~CColumnLayoutElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CColumnLayoutBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                       size();
+
+      private:
+        CColumnLayoutElement(const SColumnLayoutData& data);
+        static Hyprutils::Memory::CSharedPointer<CColumnLayoutElement> create(const SColumnLayoutData& data);
+
+        void                                                           replaceData(const SColumnLayoutData& data);
+
+        virtual void                                                   paint();
+        virtual void                                                   reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>               preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>               minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                                   positioningDependsOnChild();
+
+        Hyprutils::Math::Vector2D                                      childSize(Hyprutils::Memory::CSharedPointer<IElement> child);
+
+        Hyprutils::Memory::CUniquePointer<SColumnLayoutImpl>           m_impl;
+
+        friend class CColumnLayoutBuilder;
+    };
+};
+
+--- END OF: element/ColumnLayout.hpp ---
+
+
+=== element/Combobox.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+
+#include <hyprgraphics/color/Color.hpp>
+#include <hyprutils/memory/UniquePtr.hpp>
+
+#include <functional>
+#include <vector>
+
+namespace Hyprtoolkit {
+
+    struct SComboboxImpl;
+    struct SComboboxData;
+    class CComboboxElement;
+
+    class CComboboxBuilder {
+      public:
+        ~CComboboxBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CComboboxBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CComboboxBuilder>        items(std::vector<std::string>&&);
+        Hyprutils::Memory::CSharedPointer<CComboboxBuilder>        currentItem(size_t);
+        Hyprutils::Memory::CSharedPointer<CComboboxBuilder>        onChanged(std::function<void(Hyprutils::Memory::CSharedPointer<CComboboxElement>, size_t)>&&);
+        Hyprutils::Memory::CSharedPointer<CComboboxBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CComboboxElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CComboboxBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SComboboxData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CComboboxElement> m_element;
+
+        CComboboxBuilder() = default;
+
+        friend class CComboboxElement;
+    };
+
+    class CComboboxElement : public IElement {
+      public:
+        virtual ~CComboboxElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CComboboxBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                   size();
+        size_t                                              current();
+        void                                                setCurrent(size_t current);
+
+      private:
+        CComboboxElement(const SComboboxData& data);
+        static Hyprutils::Memory::CSharedPointer<CComboboxElement> create(const SComboboxData& data);
+
+        void                                                       replaceData(const SComboboxData& data);
+
+        virtual void                                               paint();
+        virtual void                                               reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>           preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>           minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>           maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                               acceptsMouseInput();
+        virtual ePointerShape                                      pointerShape();
+        virtual bool                                               positioningDependsOnChild();
+
+        void                                                       setSelection(size_t idx);
+        void                                                       init();
+        void                                                       updateLabel(const std::string& str);
+
+        void                                                       openDropdown();
+        void                                                       closeDropdown();
+
+        Hyprutils::Memory::CUniquePointer<SComboboxImpl>           m_impl;
+
+        friend class CComboboxBuilder;
+        friend class CComboboxClickable;
+    };
+};
+
+--- END OF: element/Combobox.hpp ---
+
+
+=== element/Element.hpp ===
+
+#pragma once
+
+#include <vector>
+#include <cstdint>
+#include <optional>
+#include <functional>
+
+#include <hyprutils/memory/SharedPtr.hpp>
+#include <hyprutils/memory/WeakPtr.hpp>
+#include <hyprutils/memory/UniquePtr.hpp>
+#include <hyprutils/math/Box.hpp>
+
+#include "../types/PointerShape.hpp"
+#include "../palette/Color.hpp"
+#include "../core/Input.hpp"
+#include "../core/CoreMacros.hpp"
+
+namespace Hyprtoolkit {
+
+    struct SElementInternalData;
+
+    using colorFn = std::function<CHyprColor()>;
+
+    class IElement {
+      public:
+        enum ePositionMode : uint8_t {
+            HT_POSITION_ABSOLUTE = 0,
+            HT_POSITION_AUTO,
+        };
+
+        enum ePositionFlag : uint8_t {
+            HT_POSITION_FLAG_HCENTER = (1 << 0),
+            HT_POSITION_FLAG_VCENTER = (1 << 1),
+            HT_POSITION_FLAG_CENTER  = HT_POSITION_FLAG_HCENTER | HT_POSITION_FLAG_VCENTER,
+            HT_POSITION_FLAG_LEFT    = (1 << 2),
+            HT_POSITION_FLAG_RIGHT   = (1 << 3),
+            HT_POSITION_FLAG_TOP     = (1 << 4),
+            HT_POSITION_FLAG_BOTTOM  = (1 << 5),
+
+            HT_POSITION_FLAG_ALL = 0xFF,
+        };
+
+        virtual ~IElement();
+
+        virtual void                      paint() = 0;
+        virtual Hyprutils::Math::Vector2D size()  = 0;
+        virtual Hyprutils::Math::Vector2D posFromParent();
+        virtual void                      reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+
+        // TODO: move this to builders, this is clunky
+        virtual void setPositionMode(ePositionMode mode);
+        virtual void setPositionFlag(ePositionFlag flag, bool set);
+        virtual void setAbsolutePosition(const Hyprutils::Math::Vector2D& offset);
+        virtual void addChild(Hyprutils::Memory::CSharedPointer<IElement> child);
+        virtual void removeChild(Hyprutils::Memory::CSharedPointer<IElement> child);
+        virtual void clearChildren();
+        virtual void setMargin(float thick);
+        virtual void setGrouped(bool grouped);
+
+        // this will make this element get mouse input, then you can get events
+        virtual void setReceivesMouse(bool x);
+        virtual void setMouseEnter(std::function<void(const Hyprutils::Math::Vector2D&)>&& fn);
+        virtual void setMouseLeave(std::function<void()>&& fn);
+        virtual void setMouseMove(std::function<void(const Hyprutils::Math::Vector2D&)>&& fn);
+        virtual void setMouseButton(std::function<void(Input::eMouseButton, bool)>&& fn);
+        virtual void setMouseAxis(std::function<void(Input::eAxisAxis, float)>&& fn);
+
+        virtual void setTooltip(std::string&&);
+
+        virtual void setRepositioned(std::function<void()>&& fn);
+
+        virtual void setGrow(bool grow);
+        virtual void setGrow(bool growH, bool growV);
+
+        // forces a reposition right now, useful for pre-calculating expected sizes
+        virtual void forceReposition();
+
+        HT_HIDDEN :
+
+            /* Sizes for auto positioning in layouts */
+            virtual std::optional<Hyprutils::Math::Vector2D>
+                                                         preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D> minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D> maximumSize(const Hyprutils::Math::Vector2D& parent);
+
+        virtual bool                                     acceptsMouseInput();
+        virtual bool                                     acceptsKeyboardInput();
+        virtual ePointerShape                            pointerShape();
+        virtual std::function<ePointerShape()>           pointerShapeFn();
+        virtual bool                                     alwaysGetMouseInput();
+        virtual void                                     imCommitNewText(const std::string& text);
+        virtual void                                     imApplyText();
+
+        virtual void                                     recheckColor();
+        virtual bool                                     positioningDependsOnChild();
+        virtual Hyprutils::Math::CBox                    opaqueBox();
+
+        //
+
+        Hyprutils::Memory::CUniquePointer<SElementInternalData> impl;
+
+      protected:
+        IElement();
+    };
+};
+
+--- END OF: element/Element.hpp ---
+
+
+=== element/Image.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+#include "../types/ImageTypes.hpp"
+
+#include <hyprgraphics/resource/AsyncResourceGatherer.hpp>
+#include <hyprgraphics/resource/resources/ImageResource.hpp>
+
+namespace Hyprtoolkit {
+
+    class IRendererTexture;
+    struct SImageImpl;
+    struct SImageData;
+    class CImageElement;
+    class ISystemIconDescription;
+
+    class CImageBuilder {
+      public:
+        ~CImageBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CImageBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CImageBuilder>        path(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CImageBuilder>        icon(const Hyprutils::Memory::CSharedPointer<ISystemIconDescription>&);
+        Hyprutils::Memory::CSharedPointer<CImageBuilder>        data(std::vector<uint8_t>&& data);
+        Hyprutils::Memory::CSharedPointer<CImageBuilder>        a(float);
+        Hyprutils::Memory::CSharedPointer<CImageBuilder>        fitMode(eImageFitMode);
+        Hyprutils::Memory::CSharedPointer<CImageBuilder>        sync(bool);
+        Hyprutils::Memory::CSharedPointer<CImageBuilder>        rounding(int);
+        Hyprutils::Memory::CSharedPointer<CImageBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CImageElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CImageBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SImageData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CImageElement> m_element;
+
+        CImageBuilder() = default;
+
+        friend class CImageElement;
+    };
+
+    class CImageElement : public IElement {
+      public:
+        virtual ~CImageElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CImageBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                size();
+
+      private:
+        CImageElement(const SImageData& data);
+        static Hyprutils::Memory::CSharedPointer<CImageElement> create(const SImageData& data);
+
+        void                                                    replaceData(const SImageData& data);
+
+        //
+        virtual void                                     paint();
+        virtual void                                     reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D> preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D> minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D> maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                     positioningDependsOnChild();
+
+        void                                             renderTex();
+
+        Hyprutils::Memory::CUniquePointer<SImageImpl>    m_impl;
+
+        friend class CImageBuilder;
+    };
+};
+
+--- END OF: element/Image.hpp ---
+
+
+=== element/Line.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+#include "../palette/Color.hpp"
+
+#include <hyprutils/memory/UniquePtr.hpp>
+
+namespace Hyprtoolkit {
+
+    struct SLineImpl;
+    struct SLineData;
+    class CLineElement;
+
+    class CLineBuilder {
+      public:
+        ~CLineBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CLineBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CLineBuilder>        color(colorFn&&);
+        Hyprutils::Memory::CSharedPointer<CLineBuilder>        thick(int);
+        Hyprutils::Memory::CSharedPointer<CLineBuilder>        points(std::vector<Hyprutils::Math::Vector2D>&&); // [0, 0] - [1, 1]
+        Hyprutils::Memory::CSharedPointer<CLineBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CLineElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CLineBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SLineData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CLineElement> m_element;
+
+        CLineBuilder() = default;
+
+        friend class CLineElement;
+    };
+
+    class CLineElement : public IElement {
+      public:
+        virtual ~CLineElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CLineBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D               size();
+
+      private:
+        static Hyprutils::Memory::CSharedPointer<CLineElement> create(const SLineData& data);
+        CLineElement(const SLineData& data);
+
+        void                                             replaceData(const SLineData& data);
+
+        virtual void                                     paint();
+        virtual void                                     reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D> preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D> minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D> maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                     positioningDependsOnChild();
+        virtual void                                     recheckColor();
+
+        Hyprutils::Memory::CUniquePointer<SLineImpl>     m_impl;
+
+        friend class CLineBuilder;
+    };
+};
+
+--- END OF: element/Line.hpp ---
+
+
+=== element/Null.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+#include "../palette/Color.hpp"
+
+#include <hyprutils/memory/UniquePtr.hpp>
+
+namespace Hyprtoolkit {
+
+    struct SNullData;
+    struct SNullImpl;
+    class CNullElement;
+
+    class CNullBuilder {
+      public:
+        ~CNullBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CNullBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CNullBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CNullElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CNullBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SNullData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CNullElement> m_element;
+
+        CNullBuilder() = default;
+
+        friend class CNullElement;
+    };
+
+    class CNullElement : public IElement {
+      public:
+        virtual ~CNullElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CNullBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D               size();
+
+      private:
+        CNullElement(const SNullData& data);
+        static Hyprutils::Memory::CSharedPointer<CNullElement> create(const SNullData& data);
+
+        void                                                   replaceData(const SNullData& data);
+
+        virtual void                                           paint();
+        virtual void                                           reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>       preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>       minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>       maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                           positioningDependsOnChild();
+
+        Hyprutils::Memory::CUniquePointer<SNullImpl>           m_impl;
+
+        friend class CNullBuilder;
+    };
+};
+
+--- END OF: element/Null.hpp ---
+
+
+=== element/Rectangle.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+#include "../palette/Color.hpp"
+
+#include <hyprutils/memory/UniquePtr.hpp>
+
+namespace Hyprtoolkit {
+
+    struct SRectangleImpl;
+    struct SRectangleData;
+    class CRectangleElement;
+
+    class CRectangleBuilder {
+      public:
+        ~CRectangleBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CRectangleBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CRectangleBuilder>        color(colorFn&&);
+        Hyprutils::Memory::CSharedPointer<CRectangleBuilder>        borderColor(colorFn&&);
+        Hyprutils::Memory::CSharedPointer<CRectangleBuilder>        rounding(int);
+        Hyprutils::Memory::CSharedPointer<CRectangleBuilder>        borderThickness(int);
+        Hyprutils::Memory::CSharedPointer<CRectangleBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CRectangleElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CRectangleBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SRectangleData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CRectangleElement> m_element;
+
+        CRectangleBuilder() = default;
+
+        friend class CRectangleElement;
+    };
+
+    class CRectangleElement : public IElement {
+      public:
+        virtual ~CRectangleElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CRectangleBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                    size();
+
+      private:
+        static Hyprutils::Memory::CSharedPointer<CRectangleElement> create(const SRectangleData& data);
+        CRectangleElement(const SRectangleData& data);
+
+        void                                              replaceData(const SRectangleData& data);
+
+        virtual void                                      paint();
+        virtual void                                      reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>  preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>  minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>  maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                      positioningDependsOnChild();
+        virtual void                                      recheckColor();
+        virtual Hyprutils::Math::CBox                     opaqueBox();
+
+        Hyprutils::Memory::CUniquePointer<SRectangleImpl> m_impl;
+
+        friend class CRectangleBuilder;
+    };
+};
+
+--- END OF: element/Rectangle.hpp ---
+
+
+=== element/RowLayout.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+
+namespace Hyprtoolkit {
+    struct SRowLayoutData;
+    struct SRowLayoutImpl;
+    class CRowLayoutElement;
+
+    class CRowLayoutBuilder {
+      public:
+        ~CRowLayoutBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CRowLayoutBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CRowLayoutBuilder>        gap(size_t gap);
+        Hyprutils::Memory::CSharedPointer<CRowLayoutBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CRowLayoutElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CRowLayoutBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SRowLayoutData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CRowLayoutElement> m_element;
+
+        CRowLayoutBuilder() = default;
+
+        friend class CRowLayoutElement;
+    };
+
+    class CRowLayoutElement : public IElement {
+      public:
+        virtual ~CRowLayoutElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CRowLayoutBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                    size();
+
+      private:
+        CRowLayoutElement(const SRowLayoutData& data);
+        static Hyprutils::Memory::CSharedPointer<CRowLayoutElement> create(const SRowLayoutData& data);
+
+        void                                                        replaceData(const SRowLayoutData& data);
+
+        virtual void                                                paint();
+        virtual void                                                reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>            preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>            minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                                positioningDependsOnChild();
+        Hyprutils::Math::Vector2D                                   childSize(Hyprutils::Memory::CSharedPointer<IElement> child);
+
+        Hyprutils::Memory::CUniquePointer<SRowLayoutImpl>           m_impl;
+
+        friend class CCheckboxElement;
+        friend class CSpinboxElement;
+        friend class CSpinboxSpinner;
+        friend class CRowLayoutBuilder;
+        friend class CSliderSlider;
+        friend class CSliderElement;
+        friend class CComboboxElement;
+        friend class CComboboxClickable;
+    };
+};
+
+--- END OF: element/RowLayout.hpp ---
+
+
+=== element/ScrollArea.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+
+namespace Hyprtoolkit {
+    struct SScrollAreaData;
+    struct SScrollAreaImpl;
+    class CScrollAreaElement;
+
+    class CScrollAreaBuilder {
+      public:
+        ~CScrollAreaBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CScrollAreaBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CScrollAreaBuilder>        scrollX(bool);
+        Hyprutils::Memory::CSharedPointer<CScrollAreaBuilder>        scrollY(bool);
+        Hyprutils::Memory::CSharedPointer<CScrollAreaBuilder>        blockUserScroll(bool);
+        Hyprutils::Memory::CSharedPointer<CScrollAreaBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CScrollAreaElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CScrollAreaBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SScrollAreaData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CScrollAreaElement> m_element;
+
+        CScrollAreaBuilder() = default;
+
+        friend class CScrollAreaElement;
+    };
+
+    class CScrollAreaElement : public IElement {
+      public:
+        virtual ~CScrollAreaElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CScrollAreaBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                     size();
+
+        Hyprutils::Math::Vector2D                             getCurrentScroll();
+        void                                                  setScroll(const Hyprutils::Math::Vector2D&);
+
+      private:
+        CScrollAreaElement(const SScrollAreaData& data);
+        static Hyprutils::Memory::CSharedPointer<CScrollAreaElement> create(const SScrollAreaData& data);
+
+        void                                                         replaceData(const SScrollAreaData& data);
+
+        virtual void                                                 paint();
+        virtual void                                                 reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>             preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>             minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                                 acceptsMouseInput();
+        virtual bool                                                 alwaysGetMouseInput();
+        virtual ePointerShape                                        pointerShape();
+        virtual bool                                                 positioningDependsOnChild();
+
+        Hyprutils::Memory::CUniquePointer<SScrollAreaImpl>           m_impl;
+
+        friend class CScrollAreaBuilder;
+    };
+};
+
+--- END OF: element/ScrollArea.hpp ---
+
+
+=== element/Slider.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+
+#include <hyprgraphics/color/Color.hpp>
+#include <hyprutils/memory/UniquePtr.hpp>
+
+#include <functional>
+
+namespace Hyprtoolkit {
+
+    struct SSliderImpl;
+    struct SSliderData;
+    class CSliderElement;
+
+    class CSliderBuilder {
+      public:
+        ~CSliderBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CSliderBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CSliderBuilder>        onChanged(std::function<void(Hyprutils::Memory::CSharedPointer<CSliderElement>, float)>&&);
+        Hyprutils::Memory::CSharedPointer<CSliderBuilder>        min(float);
+        Hyprutils::Memory::CSharedPointer<CSliderBuilder>        max(float);
+        Hyprutils::Memory::CSharedPointer<CSliderBuilder>        val(float);
+        Hyprutils::Memory::CSharedPointer<CSliderBuilder>        snapInt(bool);
+        Hyprutils::Memory::CSharedPointer<CSliderBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CSliderElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CSliderBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SSliderData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CSliderElement> m_element;
+
+        CSliderBuilder() = default;
+
+        friend class CSliderElement;
+    };
+
+    class CSliderElement : public IElement {
+      public:
+        virtual ~CSliderElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CSliderBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                 size();
+        bool                                              sliding();
+
+      private:
+        CSliderElement(const SSliderData& data);
+        static Hyprutils::Memory::CSharedPointer<CSliderElement> create(const SSliderData& data);
+
+        void                                                     replaceData(const SSliderData& data);
+
+        virtual void                                             paint();
+        virtual void                                             reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>         preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>         minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>         maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                             acceptsMouseInput();
+        virtual ePointerShape                                    pointerShape();
+        virtual bool                                             positioningDependsOnChild();
+
+        Hyprutils::Memory::CUniquePointer<SSliderImpl>           m_impl;
+
+        friend class CSliderBuilder;
+        friend class CSliderSlider;
+    };
+};
+
+--- END OF: element/Slider.hpp ---
+
+
+=== element/Spinbox.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+
+#include <hyprgraphics/color/Color.hpp>
+#include <hyprutils/memory/UniquePtr.hpp>
+
+#include <functional>
+#include <vector>
+
+namespace Hyprtoolkit {
+
+    struct SSpinboxImpl;
+    struct SSpinboxData;
+    class CSpinboxElement;
+
+    class CSpinboxBuilder {
+      public:
+        ~CSpinboxBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CSpinboxBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CSpinboxBuilder>        label(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CSpinboxBuilder>        items(std::vector<std::string>&&);
+        Hyprutils::Memory::CSharedPointer<CSpinboxBuilder>        currentItem(size_t);
+        Hyprutils::Memory::CSharedPointer<CSpinboxBuilder>        onChanged(std::function<void(Hyprutils::Memory::CSharedPointer<CSpinboxElement>, size_t)>&&);
+        Hyprutils::Memory::CSharedPointer<CSpinboxBuilder>        fill(bool);
+        Hyprutils::Memory::CSharedPointer<CSpinboxBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CSpinboxElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CSpinboxBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<SSpinboxData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CSpinboxElement> m_element;
+
+        CSpinboxBuilder() = default;
+
+        friend class CSpinboxElement;
+    };
+
+    class CSpinboxElement : public IElement {
+      public:
+        virtual ~CSpinboxElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CSpinboxBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                  size();
+        size_t                                             current();
+        void                                               setCurrent(size_t current);
+
+      private:
+        CSpinboxElement(const SSpinboxData& data);
+        static Hyprutils::Memory::CSharedPointer<CSpinboxElement> create(const SSpinboxData& data);
+
+        void                                                      replaceData(const SSpinboxData& data);
+
+        void                                                      init();
+
+        virtual void                                              paint();
+        virtual void                                              reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>          preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>          minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>          maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                              acceptsMouseInput();
+        virtual ePointerShape                                     pointerShape();
+        virtual bool                                              positioningDependsOnChild();
+
+        Hyprutils::Memory::CUniquePointer<SSpinboxImpl>           m_impl;
+
+        friend class CSpinboxSpinner;
+        friend class CSpinboxBuilder;
+    };
+};
+
+--- END OF: element/Spinbox.hpp ---
+
+
+=== element/Textbox.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+
+#include <hyprutils/memory/UniquePtr.hpp>
+#include <tuple>
+
+namespace Hyprtoolkit {
+
+    struct STextboxImpl;
+    struct STextboxData;
+    class CTextboxElement;
+
+    class CTextboxBuilder {
+      public:
+        ~CTextboxBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CTextboxBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CTextboxBuilder>        placeholder(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CTextboxBuilder>        defaultText(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CTextboxBuilder>        onTextEdited(std::function<void(Hyprutils::Memory::CSharedPointer<CTextboxElement>, const std::string&)>&&);
+        Hyprutils::Memory::CSharedPointer<CTextboxBuilder>        multiline(bool);
+        Hyprutils::Memory::CSharedPointer<CTextboxBuilder>        password(bool);
+        Hyprutils::Memory::CSharedPointer<CTextboxBuilder>        size(CDynamicSize&&);
+
+        Hyprutils::Memory::CSharedPointer<CTextboxElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CTextboxBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<STextboxData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CTextboxElement> m_element;
+
+        CTextboxBuilder() = default;
+
+        friend class CTextboxElement;
+    };
+
+    class CTextboxElement : public IElement {
+      public:
+        virtual ~CTextboxElement() = default;
+
+        Hyprutils::Memory::CSharedPointer<CTextboxBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D                  size();
+        void                                               focus(bool focus = true);
+        std::string_view                                   currentText();
+        size_t                                             cursorPos() const;
+        std::tuple<ssize_t, ssize_t>                       selection() const;
+
+      private:
+        static Hyprutils::Memory::CSharedPointer<CTextboxElement> create(const STextboxData& data);
+        CTextboxElement(const STextboxData& data);
+
+        void                                             replaceData(const STextboxData& data);
+        void                                             init();
+
+        virtual void                                     paint();
+        virtual void                                     reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D> preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D> minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D> maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                     acceptsMouseInput();
+        virtual ePointerShape                            pointerShape();
+        virtual bool                                     acceptsKeyboardInput();
+        virtual void                                     imCommitNewText(const std::string&);
+        virtual void                                     imApplyText();
+        virtual bool                                     positioningDependsOnChild();
+
+        Hyprutils::Memory::CUniquePointer<STextboxImpl>  m_impl;
+
+        friend class CTextboxBuilder;
+    };
+};
+
+--- END OF: element/Textbox.hpp ---
+
+
+=== element/Text.hpp ===
+
+#pragma once
+
+#include "Element.hpp"
+#include "../types/SizeType.hpp"
+#include "../palette/Color.hpp"
+#include "../types/FontTypes.hpp"
+
+#include <hyprgraphics/resource/resources/TextResource.hpp>
+
+#include <hyprutils/memory/Atomic.hpp>
+
+#include <optional>
+
+namespace Hyprtoolkit {
+
+    class IRendererTexture;
+    struct STextImpl;
+    struct STextData;
+    class CTextElement;
+
+    class CTextBuilder {
+      public:
+        ~CTextBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CTextBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        color(colorFn&&);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        a(float);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        fontSize(CFontSize&&);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        align(eFontAlignment);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        text(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        fontFamily(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        clampSize(Hyprutils::Math::Vector2D&&);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        callback(std::function<void()>&&);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        noEllipsize(bool);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        size(CDynamicSize&&);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        async(bool x);
+        Hyprutils::Memory::CSharedPointer<CTextBuilder>        interactable(bool x);
+
+        Hyprutils::Memory::CSharedPointer<CTextElement>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CTextBuilder> m_self;
+        Hyprutils::Memory::CUniquePointer<STextData>  m_data;
+        Hyprutils::Memory::CWeakPointer<CTextElement> m_element;
+
+        CTextBuilder() = default;
+
+        friend class CTextElement;
+    };
+
+    class CTextElement : public IElement {
+      public:
+        virtual ~CTextElement();
+
+        Hyprutils::Memory::CSharedPointer<CTextBuilder> rebuild();
+        virtual Hyprutils::Math::Vector2D               size();
+
+        HT_HIDDEN : CTextElement(const STextData& data);
+        static Hyprutils::Memory::CSharedPointer<CTextElement> create(const STextData& data);
+
+        void                                                   replaceData(const STextData& data);
+
+        virtual void                                           paint();
+        virtual void                                           reposition(const Hyprutils::Math::CBox& box, const Hyprutils::Math::Vector2D& maxSize = {-1, -1});
+        virtual std::optional<Hyprutils::Math::Vector2D>       preferredSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>       minimumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual std::optional<Hyprutils::Math::Vector2D>       maximumSize(const Hyprutils::Math::Vector2D& parent);
+        virtual bool                                           positioningDependsOnChild();
+        virtual void                                           recheckColor();
+        virtual bool                                           acceptsMouseInput();
+        virtual std::function<ePointerShape()>                 pointerShapeFn();
+
+        Hyprutils::Memory::CUniquePointer<STextImpl>           m_impl;
+
+        friend class CButtonElement;
+        friend class CTextBuilder;
+        friend struct STextboxImpl;
+        friend class CTextboxElement;
+    };
+};
+
+--- END OF: element/Text.hpp ---
+
+
+=== palette/Color.hpp ===
+
+#pragma once
+
+#include <cstdint>
+#include <hyprgraphics/color/Color.hpp>
+
+namespace Hyprtoolkit {
+    class CHyprColor {
+      public:
+        CHyprColor();
+        CHyprColor(float r, float g, float b, float a = 1.F);
+        CHyprColor(const Hyprgraphics::CColor& col, float a);
+        CHyprColor(uint64_t);
+
+        // AR32
+        uint32_t                     getAsHex() const;
+        Hyprgraphics::CColor::SSRGB  asRGB() const;
+        Hyprgraphics::CColor::SOkLab asOkLab() const;
+        Hyprgraphics::CColor::SHSL   asHSL() const;
+        CHyprColor                   stripA() const;
+
+        CHyprColor                   brighten(float coeff) const;
+        CHyprColor                   darken(float coeff) const;
+        CHyprColor                   mix(const CHyprColor& with, float coeff) const;
+
+        //
+        bool operator==(const CHyprColor& c2) const;
+
+        // stubs for the AnimationMgr
+        CHyprColor operator-(const CHyprColor& c2) const;
+        CHyprColor operator+(const CHyprColor& c2) const;
+        CHyprColor operator*(const float& c2) const;
+
+        double     r = 0, g = 0, b = 0, a = 0;
+
+      private:
+        Hyprgraphics::CColor::SOkLab okLab; // cache for the OkLab representation
+    };
+}
+--- END OF: palette/Color.hpp ---
+
+
+=== palette/Palette.hpp ===
+
+#pragma once
+
+#include <hyprutils/memory/SharedPtr.hpp>
+
+#include "Color.hpp"
+
+#include <string>
+
+namespace Hyprtoolkit {
+
+    class CPalette {
+      public:
+        ~CPalette() = default;
+
+        /* Get the best palette possible. Retrieves configured system palette if available, default
+            otherwise */
+        static Hyprutils::Memory::CSharedPointer<CPalette> palette();
+
+        /* Empty palette with just black */
+        static Hyprutils::Memory::CSharedPointer<CPalette> emptyPalette();
+
+        struct {
+            CHyprColor background;
+            CHyprColor text;
+            CHyprColor base;
+            CHyprColor alternateBase;
+            CHyprColor brightText;
+            CHyprColor linkText;
+            CHyprColor accent;
+            CHyprColor accentSecondary;
+        } m_colors;
+
+        struct {
+            int         h1Size              = 19;
+            int         h2Size              = 15;
+            int         h3Size              = 13;
+            int         fontSize            = 11;
+            int         smallFontSize       = 10;
+            std::string iconTheme           = ""; // first one found
+            int         bigRounding         = 10;
+            int         smallRounding       = 5;
+            std::string fontFamily          = "Sans Serif";
+            std::string fontFamilyMonospace = "monospace";
+        } m_vars;
+
+      private:
+        CPalette() = default;
+
+        bool m_isConfig = false;
+
+        friend class CBackend;
+    };
+}
+
+--- END OF: palette/Palette.hpp ---
+
+
+=== system/Icons.hpp ===
+
+#pragma once
+
+#include <hyprutils/memory/SharedPtr.hpp>
+
+namespace Hyprtoolkit {
+
+    class ISystemIconDescription {
+      public:
+        virtual ~ISystemIconDescription() = default;
+
+        virtual bool exists()   = 0;
+        virtual bool scalable() = 0;
+
+      protected:
+        ISystemIconDescription() = default;
+    };
+
+    class ISystemIconFactory {
+      public:
+        virtual ~ISystemIconFactory() = default;
+
+        /*
+            Lookup an icon. If the icon is found, will return associated data.
+            This object can be used to create an ImageElement
+        */
+        virtual Hyprutils::Memory::CSharedPointer<ISystemIconDescription> lookupIcon(const std::string& iconName) = 0;
+
+      protected:
+        ISystemIconFactory() = default;
+    };
+}
+
+--- END OF: system/Icons.hpp ---
+
+
+=== types/FontTypes.hpp ===
+
+#pragma once
+
+#include <cstdint>
+#include <hyprutils/math/Vector2D.hpp>
+
+namespace Hyprtoolkit {
+    class CFontSize {
+      public:
+        enum eSizingBase : uint8_t {
+            HT_FONT_H1,
+            HT_FONT_H2,
+            HT_FONT_H3,
+            HT_FONT_TEXT,
+            HT_FONT_SMALL,
+            HT_FONT_ABSOLUTE,
+        };
+
+        // in the case of ABSOLUTE, multiplier is the raw value.
+        CFontSize(eSizingBase base, float multiplier = 1.F);
+
+        float ptSize();
+
+      private:
+        eSizingBase m_base  = HT_FONT_TEXT;
+        float       m_value = 1.F;
+    };
+
+    enum eFontAlignment : uint8_t {
+        HT_FONT_ALIGN_LEFT,
+        HT_FONT_ALIGN_CENTER,
+        HT_FONT_ALIGN_RIGHT,
+    };
+}
+--- END OF: types/FontTypes.hpp ---
+
+
+=== types/ImageTypes.hpp ===
+
+
+#pragma once
+
+#include <cstdint>
+
+namespace Hyprtoolkit {
+    enum eImageFitMode : uint8_t {
+        IMAGE_FIT_MODE_STRETCH = 0,
+        IMAGE_FIT_MODE_COVER,
+        IMAGE_FIT_MODE_CONTAIN,
+        IMAGE_FIT_MODE_TILE,
+    };
+}
+
+--- END OF: types/ImageTypes.hpp ---
+
+
+=== types/PointerShape.hpp ===
+
+#pragma once
+
+#include <cstdint>
+
+namespace Hyprtoolkit {
+    enum ePointerShape : uint8_t {
+        HT_POINTER_ARROW = 0,
+        HT_POINTER_POINTER,
+        HT_POINTER_TEXT,
+    };
+}
+--- END OF: types/PointerShape.hpp ---
+
+
+=== types/SizeType.hpp ===
+
+#pragma once
+
+#include <cstdint>
+#include <hyprutils/math/Vector2D.hpp>
+
+#include "../core/CoreMacros.hpp"
+
+namespace Hyprtoolkit {
+    class CDynamicSize {
+      public:
+        enum eSizingType : uint8_t {
+            HT_SIZE_ABSOLUTE,
+            HT_SIZE_PERCENT,
+            HT_SIZE_AUTO, // contain child(ren)
+        };
+
+        CDynamicSize(eSizingType typeX, eSizingType typeY, const Hyprutils::Math::Vector2D& size);
+
+        Hyprutils::Math::Vector2D calculate(Hyprutils::Math::Vector2D elSize) const;
+
+        HT_HIDDEN :
+
+            bool
+            hasAuto();
+
+      private:
+        eSizingType               m_typeX = HT_SIZE_ABSOLUTE, m_typeY = HT_SIZE_ABSOLUTE;
+        Hyprutils::Math::Vector2D m_value;
+    };
+}
+--- END OF: types/SizeType.hpp ---
+
+
+=== window/Window.hpp ===
+
+#pragma once
+
+#include <hyprutils/memory/SharedPtr.hpp>
+#include <hyprutils/signal/Signal.hpp>
+#include <hyprutils/math/Vector2D.hpp>
+
+#include "../core/Input.hpp"
+
+namespace Hyprtoolkit {
+    class IElement;
+    class IWindow;
+    class IOutput;
+    struct SWindowCreationData;
+
+    enum eWindowType : uint8_t {
+        HT_WINDOW_TOPLEVEL     = 0,
+        HT_WINDOW_POPUP        = 1,
+        HT_WINDOW_LAYER        = 2,
+        HT_WINDOW_LOCK_SURFACE = 3,
+    };
+
+    class CWindowBuilder {
+      public:
+        ~CWindowBuilder() = default;
+
+        static Hyprutils::Memory::CSharedPointer<CWindowBuilder> begin();
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder>        type(eWindowType);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder>        appTitle(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder>        appClass(std::string&&);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder>        preferredSize(const Hyprutils::Math::Vector2D&);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder>        minSize(const Hyprutils::Math::Vector2D&);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder>        maxSize(const Hyprutils::Math::Vector2D&);
+
+        // only for LAYER and LOCK_SURFACE
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> prefferedOutput(const Hyprutils::Memory::CSharedPointer<IOutput>& output);
+
+        // only for HT_WINDOW_LAYER
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> marginTopLeft(const Hyprutils::Math::Vector2D&);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> marginBottomRight(const Hyprutils::Math::Vector2D&);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> layer(uint32_t);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> anchor(uint32_t);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> exclusiveEdge(uint32_t);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> exclusiveZone(int32_t);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> kbInteractive(uint32_t);
+
+        // only for HT_WINDOW_POPUP
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> parent(const Hyprutils::Memory::CSharedPointer<IWindow>& parent);
+        Hyprutils::Memory::CSharedPointer<CWindowBuilder> pos(const Hyprutils::Math::Vector2D&);
+
+        Hyprutils::Memory::CSharedPointer<IWindow>        commence();
+
+      private:
+        Hyprutils::Memory::CWeakPointer<CWindowBuilder>        m_self;
+        Hyprutils::Memory::CUniquePointer<SWindowCreationData> m_data;
+
+        CWindowBuilder() = default;
+    };
+
+    class IWindow {
+      public:
+        virtual ~IWindow() = default;
+
+        virtual Hyprutils::Math::Vector2D pixelSize() = 0;
+        virtual float                     scale()     = 0;
+        virtual void                      close()     = 0;
+        virtual void                      open()      = 0;
+        virtual Hyprutils::Math::Vector2D cursorPos() = 0;
+
+        struct {
+            // coordinates here are logical, meaning pixel size is this * scale()
+            Hyprutils::Signal::CSignalT<Hyprutils::Math::Vector2D> resized;
+
+            // user requested a close.
+            Hyprutils::Signal::CSignalT<> closeRequest;
+
+            // popup closed
+            Hyprutils::Signal::CSignalT<> popupClosed;
+
+            // layer closed
+            Hyprutils::Signal::CSignalT<> layerClosed;
+
+            // (global) key events
+            Hyprutils::Signal::CSignalT<Input::SKeyboardKeyEvent> keyboardKey;
+        } m_events;
+
+        Hyprutils::Memory::CSharedPointer<IElement> m_rootElement;
+
+        HT_HIDDEN : IWindow() = default;
+    };
+};
+
+--- END OF: window/Window.hpp ---
+
+

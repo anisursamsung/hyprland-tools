@@ -1,0 +1,750 @@
+#include <hyprtoolkit/core/Backend.hpp>
+#include <hyprtoolkit/window/Window.hpp>
+#include <hyprtoolkit/element/Rectangle.hpp>
+#include <hyprtoolkit/element/Text.hpp>
+#include <hyprtoolkit/element/ColumnLayout.hpp>
+#include <hyprtoolkit/element/ScrollArea.hpp>
+#include <hyprtoolkit/element/RowLayout.hpp>
+#include <hyprtoolkit/element/Image.hpp>
+#include <hyprtoolkit/system/Icons.hpp>
+#include <hyprutils/memory/SharedPtr.hpp>
+#include <functional>
+#include <iostream>
+#include <vector>
+#include <filesystem>
+#include <fstream>
+#include <algorithm>
+#include <cctype>
+#include <xkbcommon/xkbcommon-keysyms.h>
+#include <cstdlib>
+
+namespace fs = std::filesystem;
+
+using namespace Hyprutils::Memory;
+
+struct DesktopApp {
+    std::string name;
+    std::string exec;
+    std::string icon;
+    std::string desktopFile;
+    bool noDisplay = false;
+    bool hidden = false;
+    
+    bool operator<(const DesktopApp& other) const {
+        return name < other.name;
+    }
+};
+
+class AppDatabase {
+  public:
+    AppDatabase() {
+        loadApps();
+    }
+    
+    const std::vector<DesktopApp>& getApps() const { return m_apps; }
+    
+    void reload() {
+        m_apps.clear();
+        loadApps();
+    }
+    
+  private:
+    void loadApps() {
+        std::vector<fs::path> desktopDirs = {
+            "/usr/share/applications",
+            fs::path(std::getenv("HOME")) / ".local/share/applications"
+        };
+        
+        for (const auto& dir : desktopDirs) {
+            if (fs::exists(dir)) {
+                loadAppsFromDirectory(dir);
+            }
+        }
+        
+        std::sort(m_apps.begin(), m_apps.end());
+        std::cout << "Loaded " << m_apps.size() << " applications" << std::endl;
+    }
+    
+    void loadAppsFromDirectory(const fs::path& directory) {
+        for (const auto& entry : fs::directory_iterator(directory)) {
+            if (entry.path().extension() == ".desktop") {
+                parseDesktopFile(entry.path());
+            }
+        }
+    }
+    
+    void parseDesktopFile(const fs::path& filepath) {
+        std::ifstream file(filepath);
+        if (!file.is_open()) return;
+        
+        DesktopApp app;
+        app.desktopFile = filepath.string();
+        
+        std::string line;
+        bool inDesktopEntry = false;
+        
+        while (std::getline(file, line)) {
+            if (line.find('#') != std::string::npos) {
+                line = line.substr(0, line.find('#'));
+            }
+            
+            line.erase(0, line.find_first_not_of(" \t"));
+            line.erase(line.find_last_not_of(" \t") + 1);
+            
+            if (line.empty()) continue;
+            
+            if (line == "[Desktop Entry]") {
+                inDesktopEntry = true;
+                continue;
+            } else if (line[0] == '[') {
+                inDesktopEntry = false;
+                continue;
+            }
+            
+            if (!inDesktopEntry) continue;
+            
+            size_t equalsPos = line.find('=');
+            if (equalsPos == std::string::npos) continue;
+            
+            std::string key = line.substr(0, equalsPos);
+            std::string value = line.substr(equalsPos + 1);
+            
+            if (key == "Name") {
+                app.name = value;
+            } else if (key == "Exec") {
+                app.exec = value;
+            } else if (key == "Icon") {
+                app.icon = value;
+            } else if (key == "NoDisplay") {
+                app.noDisplay = (value == "true");
+            } else if (key == "Hidden") {
+                app.hidden = (value == "true");
+            }
+        }
+        
+        if (!app.name.empty() && !app.exec.empty() && !app.noDisplay && !app.hidden) {
+            m_apps.push_back(app);
+        }
+    }
+    
+    std::vector<DesktopApp> m_apps;
+};
+class AppItem {
+  public:
+    AppItem(size_t index, const DesktopApp& app, CSharedPointer<Hyprtoolkit::IBackend> backend)
+        : m_index(index), m_app(app), m_backend(backend) {
+        createUI();
+        // Load icon immediately (no need for idle)
+        loadIcon();
+    }
+
+    ~AppItem() = default;
+
+    CSharedPointer<Hyprtoolkit::IElement> getElement() const { return m_background; }
+    float getHeight() const { return 50.F; }
+
+    void setActive(bool active) {
+        if (m_active == active) return;
+
+        m_active = active;
+        updateColors();
+        updateAppearance();
+    }
+
+    bool isActive() const { return m_active; }
+    const DesktopApp& getApp() const { return m_app; }
+    
+    void launch() const {
+        std::string cleanCmd = cleanExecCommand(m_app.exec);
+        std::string fullCmd = cleanCmd + " &";
+        std::system(fullCmd.c_str());
+    }
+
+  private:
+    std::string cleanExecCommand(const std::string& exec) const {
+        std::string result = exec;
+        
+        // Remove field codes
+        size_t pos = 0;
+        while ((pos = result.find('%', pos)) != std::string::npos) {
+            if (pos + 1 < result.length()) {
+                result.erase(pos, 2);
+            } else {
+                result.erase(pos, 1);
+            }
+        }
+        
+        return result;
+    }
+
+    void createUI() {
+        updateColors();
+
+        m_background = Hyprtoolkit::CRectangleBuilder::begin()
+                          ->color([this] { return m_backgroundColor; })
+                          ->rounding(6)
+                          ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                                  Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                                  {1.0F, 50.F}})
+                          ->commence();
+
+        // Use RowLayout for icon + text
+        m_rowLayout = Hyprtoolkit::CRowLayoutBuilder::begin()
+                         ->gap(10)
+                         ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                                 Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                                 {1.0F, 1.0F}})
+                         ->commence();
+        m_rowLayout->setMargin(8);
+
+        // Create icon element - initially empty
+        m_iconElement = Hyprtoolkit::CImageBuilder::begin()
+                           ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                                   Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                                   {32.F, 32.F}})
+                           ->commence();
+        m_rowLayout->addChild(m_iconElement);
+
+        // App name
+        m_text = Hyprtoolkit::CTextBuilder::begin()
+                     ->text(std::string{m_app.name})
+                     ->color([this] { return m_textColor; })
+                     ->commence();
+        m_rowLayout->addChild(m_text);
+
+        m_background->addChild(m_rowLayout);
+    }
+
+    void loadIcon() {
+        if (m_app.icon.empty()) {
+            std::cout << "App " << m_app.name << ": No icon specified" << std::endl;
+            showPlaceholder();
+            return;
+        }
+
+        std::cout << "App " << m_app.name << ": Looking for icon '" << m_app.icon << "'" << std::endl;
+        
+        // Try to load icon from system first
+        if (tryLoadSystemIcon()) {
+            return;
+        }
+        
+        // Try to find icon in filesystem paths
+        if (tryFindIconInPaths()) {
+            return;
+        }
+        
+        std::cout << "  Could not find icon for " << m_app.name << std::endl;
+        showPlaceholder();
+    }
+
+    bool tryLoadSystemIcon() {
+        // Try multiple icon name variations
+        std::vector<std::string> iconNames = getIconNameVariations(m_app.icon);
+        
+        for (const auto& iconName : iconNames) {
+            std::cout << "  Trying system icon: " << iconName << std::endl;
+            
+            m_iconHandle = m_backend->systemIcons()->lookupIcon(iconName);
+            if (m_iconHandle && m_iconHandle->exists()) {
+                std::cout << "  Found system icon!" << std::endl;
+                updateIconElement();
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    bool tryFindIconInPaths() {
+        // Common icon directories
+        std::vector<std::string> iconDirs = {
+            "/usr/share/icons/hicolor/48x48/apps/",
+            "/usr/share/icons/hicolor/32x32/apps/",
+            "/usr/share/icons/hicolor/scalable/apps/",
+            "/usr/share/icons/Adwaita/48x48/apps/",
+            "/usr/share/icons/Adwaita/32x32/apps/",
+            "/usr/share/icons/Adwaita/scalable/apps/",
+            "/usr/share/icons/gnome/48x48/apps/",
+            "/usr/share/icons/gnome/32x32/apps/",
+            "/usr/share/pixmaps/",
+            fs::path(std::getenv("HOME")) / ".local/share/icons/hicolor/48x48/apps/",
+            fs::path(std::getenv("HOME")) / ".local/share/icons/hicolor/32x32/apps/",
+            fs::path(std::getenv("HOME")) / ".local/share/pixmaps/"
+        };
+        
+        // Common extensions to try
+        std::vector<std::string> extensions = {"", ".png", ".svg", ".xpm", ".jpg", ".jpeg", ".ico"};
+        
+        // Base names to try
+        std::vector<std::string> baseNames = getIconNameVariations(m_app.icon);
+        
+        for (const auto& dir : iconDirs) {
+            if (!fs::exists(dir)) continue;
+            
+            for (const auto& baseName : baseNames) {
+                for (const auto& ext : extensions) {
+                    std::string fullPath = dir + baseName + ext;
+                    if (fs::exists(fullPath)) {
+                        std::cout << "  Found icon file: " << fullPath << std::endl;
+                        // Try to load it as a path
+                        m_iconHandle = m_backend->systemIcons()->lookupIcon(fullPath);
+                        if (m_iconHandle && m_iconHandle->exists()) {
+                            updateIconElement();
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        return false;
+    }
+
+    std::vector<std::string> getIconNameVariations(const std::string& iconSpec) {
+        std::vector<std::string> variations;
+        
+        // If it's an absolute path, just use it
+        if (iconSpec.find('/') != std::string::npos && fs::exists(iconSpec)) {
+            variations.push_back(iconSpec);
+            return variations;
+        }
+        
+        // Remove common extensions
+        std::string baseName = iconSpec;
+        std::vector<std::string> extensions = {".png", ".svg", ".xpm", ".jpg", ".jpeg", ".ico"};
+        for (const auto& ext : extensions) {
+            if (baseName.size() > ext.size() && 
+                baseName.substr(baseName.size() - ext.size()) == ext) {
+                baseName = baseName.substr(0, baseName.size() - ext.size());
+                break;
+            }
+        }
+        
+        // Common icon name patterns
+        variations.push_back(baseName);
+        variations.push_back(baseName + "-symbolic");
+        variations.push_back(baseName + ".symbolic");
+        variations.push_back(toLowerCase(baseName));
+        variations.push_back(toLowerCase(baseName) + "-symbolic");
+        
+        // Try with common prefixes
+        std::vector<std::string> prefixes = {
+            "org.gnome.", "org.kde.", "org.", "application-x-"
+        };
+        
+        for (const auto& prefix : prefixes) {
+            variations.push_back(prefix + baseName);
+            variations.push_back(prefix + toLowerCase(baseName));
+        }
+        
+        // Add the original spec
+        variations.push_back(iconSpec);
+        
+        // Remove duplicates
+        std::sort(variations.begin(), variations.end());
+        variations.erase(std::unique(variations.begin(), variations.end()), variations.end());
+        
+        return variations;
+    }
+
+    std::string toLowerCase(const std::string& str) {
+        std::string lower = str;
+        std::transform(lower.begin(), lower.end(), lower.begin(), 
+                       [](unsigned char c) { return std::tolower(c); });
+        return lower;
+    }
+
+    void updateIconElement() {
+        if (!m_iconElement || !m_iconHandle) {
+            std::cout << "  Cannot update icon element - missing element or handle" << std::endl;
+            return;
+        }
+        
+        if (auto builder = m_iconElement->rebuild()) {
+            builder->icon(m_iconHandle)
+                   ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                           Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                           {32.F, 32.F}})
+                   ->commence();
+            std::cout << "  Icon updated successfully" << std::endl;
+        } else {
+            std::cout << "  Failed to rebuild icon element" << std::endl;
+        }
+    }
+
+  void showPlaceholder() {
+    if (!m_iconElement) return;
+    
+    // Create a simple colored square as placeholder
+    auto palette = m_backend->getPalette();
+    // placeholderColor variable was unused - we can remove it or use it
+    
+    std::cout << "  Showing placeholder for " << m_app.name << std::endl;
+}
+
+    void updateColors() {
+        auto& palette = m_backend->getPalette()->m_colors;
+        m_textColor = m_active ? palette.brightText : palette.text;
+        m_backgroundColor = m_active ? palette.accent : palette.base;
+    }
+
+    void updateAppearance() {
+        if (auto builder = m_background->rebuild()) {
+            builder->color([this] { return m_backgroundColor; })->commence();
+        }
+
+        if (auto builder = m_text->rebuild()) {
+            builder->color([this] { return m_textColor; })->commence();
+        }
+
+        m_background->forceReposition();
+    }
+
+    size_t m_index;
+    DesktopApp m_app;
+    bool m_active = false;
+    CSharedPointer<Hyprtoolkit::IBackend> m_backend;
+    CSharedPointer<Hyprtoolkit::CRectangleElement> m_background;
+    CSharedPointer<Hyprtoolkit::CRowLayoutElement> m_rowLayout;
+    CSharedPointer<Hyprtoolkit::CTextElement> m_text;
+    CSharedPointer<Hyprtoolkit::CImageElement> m_iconElement;
+    CSharedPointer<Hyprtoolkit::ISystemIconDescription> m_iconHandle;
+
+    Hyprtoolkit::CHyprColor m_textColor;
+    Hyprtoolkit::CHyprColor m_backgroundColor;
+};
+class AppLauncher {
+  public:
+    AppLauncher() {
+        m_backend = Hyprtoolkit::IBackend::create();
+        
+        // Test icon system immediately
+        testIconSystem();
+        
+        m_appDatabase = std::make_unique<AppDatabase>();
+    }
+
+    ~AppLauncher() = default;
+
+    void run() {
+        createWindow();
+        createUI();
+        setupEventHandlers();
+
+        std::cout << "\n=== App Launcher Ready ===" << std::endl;
+        std::cout << "Apps: " << m_appDatabase->getApps().size() << std::endl;
+        std::cout << "Controls: ↑/↓/j/k = Navigate, ↵ = Launch, ⎋ = Close" << std::endl;
+        std::cout << "===========================\n" << std::endl;
+
+        m_window->open();
+        m_backend->enterLoop();
+    }
+
+  private:
+    void testIconSystem() {
+        std::cout << "=== Testing Icon System ===" << std::endl;
+        
+        auto palette = m_backend->getPalette();
+        std::cout << "Icon theme: " << palette->m_vars.iconTheme << std::endl;
+        std::cout << "Font family: " << palette->m_vars.fontFamily << std::endl;
+        
+        // Test with known icons that should definitely exist
+        std::vector<std::string> testIcons = {
+            "folder",
+            "system-search",
+            "application-x-executable",
+            "dialog-error",
+            "dialog-information"
+        };
+        
+        auto icons = m_backend->systemIcons();
+        
+        for (const auto& iconName : testIcons) {
+            auto icon = icons->lookupIcon(iconName);
+            std::cout << iconName << ": ";
+            if (icon) {
+                std::cout << "handle=yes, exists=" << icon->exists() 
+                          << ", scalable=" << icon->scalable() << std::endl;
+            } else {
+                std::cout << "NO HANDLE" << std::endl;
+            }
+        }
+        std::cout << "===========================\n" << std::endl;
+    }
+
+    void createWindow() {
+        m_window = Hyprtoolkit::CWindowBuilder::begin()
+                      ->type(Hyprtoolkit::HT_WINDOW_LAYER)
+                      ->appTitle("App Launcher")
+                      ->appClass("launcher")
+                      ->preferredSize({500, 600})
+                      ->anchor(1 | 2 | 4 | 8)
+                      ->layer(3)
+                      ->marginTopLeft({100, 100})
+                      ->marginBottomRight({100, 100})
+                      ->kbInteractive(1)
+                      ->exclusiveZone(-1)
+                      ->commence();
+    }
+
+    void createUI() {
+        m_background = Hyprtoolkit::CRectangleBuilder::begin()
+                          ->color([this] { return m_backend->getPalette()->m_colors.background; })
+                          ->rounding(12)
+                          ->borderColor([this] { return m_backend->getPalette()->m_colors.accent.darken(0.2); })
+                          ->borderThickness(1)
+                          ->commence();
+
+        m_mainLayout = Hyprtoolkit::CColumnLayoutBuilder::begin()
+                          ->gap(10)
+                          ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                                  Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                                  {1.0F, 1.0F}})
+                          ->commence();
+        m_mainLayout->setMargin(12);
+
+        // Header with icon
+        auto headerLayout = Hyprtoolkit::CRowLayoutBuilder::begin()
+                               ->gap(10)
+                               ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                                       Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                                       {1.0F, 40.F}})
+                               ->commence();
+
+        // Try to get an app launcher icon
+        auto launcherIcon = m_backend->systemIcons()->lookupIcon("system-search");
+        if (launcherIcon && launcherIcon->exists()) {
+            auto iconElem = Hyprtoolkit::CImageBuilder::begin()
+                               ->icon(launcherIcon)
+                               ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                                       Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                                       {32.F, 32.F}})
+                               ->commence();
+            headerLayout->addChild(iconElem);
+            std::cout << "Header icon loaded: system-search" << std::endl;
+        } else {
+            std::cout << "Header icon NOT FOUND: system-search" << std::endl;
+            // Create placeholder for header too
+            auto placeholderColor = m_backend->getPalette()->m_colors.alternateBase.darken(0.2);
+            auto placeholder = Hyprtoolkit::CRectangleBuilder::begin()
+                                  ->color([placeholderColor] { return placeholderColor; })
+                                  ->rounding(4)
+                                  ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                                          Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                                          {32.F, 32.F}})
+                                  ->commence();
+            headerLayout->addChild(placeholder);
+        }
+
+        auto title = Hyprtoolkit::CTextBuilder::begin()
+                         ->text("Application Launcher")
+                         ->color([this] { return m_backend->getPalette()->m_colors.text; })
+                         ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_H2})
+                         ->commence();
+        headerLayout->addChild(title);
+
+        m_mainLayout->addChild(headerLayout);
+
+        // App count
+        auto appCount = Hyprtoolkit::CTextBuilder::begin()
+                            ->text(std::to_string(m_appDatabase->getApps().size()) + " applications installed")
+                            ->color([this] { return m_backend->getPalette()->m_colors.text.darken(0.3); })
+                            ->commence();
+        m_mainLayout->addChild(appCount);
+
+        m_scrollArea = Hyprtoolkit::CScrollAreaBuilder::begin()
+                          ->scrollY(true)
+                          ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                                  Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                                  {1.0F, 450.F}})
+                          ->commence();
+        m_scrollArea->setGrow(true);
+
+        m_appList = Hyprtoolkit::CColumnLayoutBuilder::begin()
+                       ->gap(2)
+                       ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                               Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO,
+                               {1.0F, 1.0F}})
+                       ->commence();
+
+        createAppItems();
+
+        m_mainLayout->addChild(m_scrollArea);
+        m_scrollArea->addChild(m_appList);
+        m_background->addChild(m_mainLayout);
+        m_window->m_rootElement->addChild(m_background);
+    }
+
+    void createAppItems() {
+        m_appItems.clear();
+        const auto& apps = m_appDatabase->getApps();
+        
+        std::cout << "\nCreating UI for " << apps.size() << " applications..." << std::endl;
+        
+        for (size_t i = 0; i < apps.size(); ++i) {
+            auto appItem = std::make_shared<AppItem>(i, apps[i], m_backend);
+            m_appList->addChild(appItem->getElement());
+            m_appItems.push_back(appItem);
+            
+            // Show first 5 apps for debugging
+            if (i < 5) {
+                std::cout << "  [" << i << "] " << apps[i].name 
+                          << " (icon: " << apps[i].icon << ")" << std::endl;
+            }
+        }
+
+        if (!m_appItems.empty()) {
+            m_appItems[0]->setActive(true);
+            std::cout << "Default selection: " << m_appItems[0]->getApp().name << std::endl;
+        }
+    }
+
+    void updateSelection(size_t newIndex) {
+        if (newIndex >= m_appItems.size()) return;
+
+        // Deactivate old
+        if (m_selectedIndex < m_appItems.size()) {
+            m_appItems[m_selectedIndex]->setActive(false);
+        }
+
+        // Activate new
+        m_selectedIndex = newIndex;
+        m_appItems[m_selectedIndex]->setActive(true);
+
+        // Auto-scroll to keep selection visible
+        ensureSelectionVisible();
+
+        std::cout << "Selected: " << m_appItems[m_selectedIndex]->getApp().name 
+                  << " (" << m_selectedIndex + 1 << "/" << m_appItems.size() << ")" << std::endl;
+    }
+
+    void ensureSelectionVisible() {
+        if (m_appItems.empty() || !m_scrollArea) return;
+
+        const float ITEM_HEIGHT = m_appItems[0]->getHeight() + 2; // +2 for gap
+        const float SCROLL_AREA_HEIGHT = m_scrollArea->size().y;
+        const float CURRENT_SCROLL = m_scrollArea->getCurrentScroll().y;
+        
+        // Calculate positions
+        const float SELECTION_TOP = m_selectedIndex * ITEM_HEIGHT;
+        const float SELECTION_BOTTOM = SELECTION_TOP + ITEM_HEIGHT;
+        
+        // Check if selection is outside visible area
+        if (SELECTION_TOP < CURRENT_SCROLL) {
+            // Selection is above visible area - scroll up
+            m_scrollArea->setScroll({0.F, SELECTION_TOP});
+        } else if (SELECTION_BOTTOM > CURRENT_SCROLL + SCROLL_AREA_HEIGHT) {
+            // Selection is below visible area - scroll down
+            m_scrollArea->setScroll({0.F, SELECTION_BOTTOM - SCROLL_AREA_HEIGHT});
+        }
+    }
+
+    void launchSelectedApp() {
+        if (m_selectedIndex >= m_appItems.size()) return;
+
+        std::cout << "Launching: " << m_appItems[m_selectedIndex]->getApp().name << std::endl;
+        m_appItems[m_selectedIndex]->launch();
+        closeLauncher();
+    }
+
+    void closeLauncher() {
+        std::cout << "Closing launcher" << std::endl;
+        m_window->close();
+    }
+
+    void setupEventHandlers() {
+        m_window->m_events.layerClosed.listenStatic([this] { m_backend->destroy(); });
+        m_window->m_events.closeRequest.listenStatic([this] { m_backend->destroy(); });
+
+        m_keyboardListener = m_window->m_events.keyboardKey.listen([this](const Hyprtoolkit::Input::SKeyboardKeyEvent& event) {
+            if (!event.down) return;
+
+            switch (event.xkbKeysym) {
+                case XKB_KEY_Escape:
+                    closeLauncher();
+                    break;
+
+                case XKB_KEY_Down:
+                case XKB_KEY_j:
+                case XKB_KEY_J:
+                    if (m_selectedIndex < m_appItems.size() - 1) {
+                        updateSelection(m_selectedIndex + 1);
+                    }
+                    break;
+
+                case XKB_KEY_Up:
+                case XKB_KEY_k:
+                case XKB_KEY_K:
+                    if (m_selectedIndex > 0) {
+                        updateSelection(m_selectedIndex - 1);
+                    }
+                    break;
+
+                case XKB_KEY_Page_Down:
+                    if (m_selectedIndex + 10 < m_appItems.size()) {
+                        updateSelection(m_selectedIndex + 10);
+                    } else if (!m_appItems.empty()) {
+                        updateSelection(m_appItems.size() - 1);
+                    }
+                    break;
+
+                case XKB_KEY_Page_Up:
+                    if (m_selectedIndex >= 10) {
+                        updateSelection(m_selectedIndex - 10);
+                    } else {
+                        updateSelection(0);
+                    }
+                    break;
+
+                case XKB_KEY_Home:
+                    if (!m_appItems.empty()) {
+                        updateSelection(0);
+                    }
+                    break;
+
+                case XKB_KEY_End:
+                    if (!m_appItems.empty()) {
+                        updateSelection(m_appItems.size() - 1);
+                    }
+                    break;
+
+                case XKB_KEY_Return:
+                case XKB_KEY_KP_Enter:
+                    launchSelectedApp();
+                    break;
+
+                default:
+                    // Ignore other keys
+                    break;
+            }
+        });
+    }
+
+    // Member variables
+    CSharedPointer<Hyprtoolkit::IBackend> m_backend;
+    CSharedPointer<Hyprtoolkit::IWindow> m_window;
+    CSharedPointer<Hyprtoolkit::CRectangleElement> m_background;
+    CSharedPointer<Hyprtoolkit::CColumnLayoutElement> m_mainLayout;
+    CSharedPointer<Hyprtoolkit::CScrollAreaElement> m_scrollArea;
+    CSharedPointer<Hyprtoolkit::CColumnLayoutElement> m_appList;
+
+    std::unique_ptr<AppDatabase> m_appDatabase;
+    std::vector<std::shared_ptr<AppItem>> m_appItems;
+    size_t m_selectedIndex = 0;
+
+    Hyprutils::Signal::CHyprSignalListener m_keyboardListener;
+};
+
+int main() {
+    try {
+        std::cout << "=== App Launcher Starting ===" << std::endl;
+        
+        AppLauncher launcher;
+        launcher.run();
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+}

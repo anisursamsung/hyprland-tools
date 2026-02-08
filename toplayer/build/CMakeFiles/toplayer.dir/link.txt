@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/toplayer.dir/link.d CMakeFiles/toplayer.dir/src/main.cpp.o -o toplayer  /usr/lib/libhyprtoolkit.so /usr/lib/libpixman-1.so /usr/lib/libdrm.so /usr/lib/libhyprutils.so
