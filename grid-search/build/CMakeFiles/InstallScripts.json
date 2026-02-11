@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/anisur/Projects/hyprland-tools/grid-search/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

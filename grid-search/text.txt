@@ -1,0 +1,921 @@
+=== Box.cpp ===
+Size: 9444 bytes | Last modified: 2026-02-09 23:06:47
+
+#include "Box.hpp"
+#include <iostream>
+
+Box::Box(Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IBackend> backend,
+         const std::string& title,
+         const std::string& imagePath,
+         Hyprtoolkit::CHyprColor boxColor,
+         Hyprtoolkit::CHyprColor borderColor,
+         Hyprtoolkit::CHyprColor textColor,
+         float width,
+         float height,
+         int borderRadius,
+         int borderThickness)
+    : m_title(title),              // m_title is declared first in Box.hpp
+      m_imagePath(imagePath),      // then m_imagePath
+      m_boxColor(boxColor),        // then m_boxColor
+      m_borderColor(borderColor),  // then m_borderColor
+      m_textColor(textColor),      // then m_textColor
+      m_width(width),              // then m_width
+      m_height(height),            // then m_height
+      m_borderRadius(borderRadius), // then m_borderRadius
+      m_borderThickness(borderThickness), // then m_borderThickness
+      m_backend(backend) {         // m_backend is declared LAST in Box.hpp (line 61)
+    createUI();
+}
+
+void Box::createUI() {
+    // Create main column layout for entire box
+    m_mainLayout = Hyprtoolkit::CColumnLayoutBuilder::begin()
+        ->gap(0)
+        ->size(Hyprtoolkit::CDynamicSize(
+            Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+            Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+            {m_width - (m_borderThickness * 2), m_height - (m_borderThickness * 2)}))
+        ->commence();
+    
+    // Create content layout for image and text
+    m_contentLayout = Hyprtoolkit::CColumnLayoutBuilder::begin()
+        ->gap(0)
+        ->size(Hyprtoolkit::CDynamicSize(
+            Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+            Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+            {1.0f, 1.0f}))
+        ->commence();
+    
+    m_contentLayout->setMargin(10);
+    
+    // Create image element (top part)
+    m_image = Hyprtoolkit::CImageBuilder::begin()
+        ->path(std::string{m_imagePath})
+        ->size(Hyprtoolkit::CDynamicSize(
+            Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+            Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+            {1.0f, 0.9f}))  // Image takes 90% of content height
+        ->fitMode(Hyprtoolkit::eImageFitMode::IMAGE_FIT_MODE_CONTAIN)
+        ->rounding(m_borderRadius / 2)  // Half of box rounding
+        ->sync(false)
+        ->commence();
+    
+    std::string fontFamilyStr = "Sans Serif";
+    if (m_backend) {
+        auto palette = m_backend->getPalette();	
+        if (palette && !palette->m_vars.fontFamily.empty()) {
+            fontFamilyStr = palette->m_vars.fontFamily;
+        }
+    }
+    
+    // Create text label (bottom part) - takes remaining 10% space
+    m_text = Hyprtoolkit::CTextBuilder::begin()
+        ->text(std::string{m_title})
+        ->color([this] { 
+            // Check if we have backend and palette
+            if (m_backend) {
+                auto palette = m_backend->getPalette();
+                if (palette) {
+                    return palette->m_colors.text;  // Use palette text color
+                }
+            }
+            // Fallback to original text color
+            return m_textColor; 
+        })
+        ->fontFamily(std::move(fontFamilyStr))
+        ->align(Hyprtoolkit::HT_FONT_ALIGN_CENTER)
+        ->size(Hyprtoolkit::CDynamicSize(
+            Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+            Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+            {1.0f, 0.1f}))  // Text takes 10% of content height
+        ->commence();
+    
+    // Add image and text to content layout
+    m_contentLayout->addChild(m_image);
+    m_contentLayout->addChild(m_text);
+    
+    // Add content layout to main layout
+    m_mainLayout->addChild(m_contentLayout);
+    
+    // Create background box
+    m_background = Hyprtoolkit::CRectangleBuilder::begin()
+        ->color([this] { 
+            // Check if we have backend and palette
+            if (m_backend) {
+                auto palette = m_backend->getPalette();
+                if (palette) {
+                    return palette->m_colors.alternateBase;  // Use palette alternateBase
+                }
+            }
+            // Fallback to original box color
+            return m_boxColor; 
+        })
+        ->rounding(m_borderRadius)
+        ->borderColor([this] { 
+            // Check if we have backend and palette
+            if (m_backend) {
+                auto palette = m_backend->getPalette();
+                if (palette) {
+                    return palette->m_colors.accent;  // Use palette accent
+                }
+            }
+            // Fallback to original border color
+            return m_borderColor; 
+        })
+        ->borderThickness(m_borderThickness)
+        ->size(Hyprtoolkit::CDynamicSize(
+            Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+            Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+            {m_width, m_height}))
+        ->commence();
+    
+    // Add main layout to background
+    m_background->addChild(m_mainLayout);
+}
+
+void Box::updateUI() {
+    // Rebuild background with updated properties
+    if (auto builder = m_background->rebuild()) {
+        builder
+            ->color([this] { 
+                if (m_backend) {
+                    auto palette = m_backend->getPalette();
+                    if (palette) {
+                        return palette->m_colors.alternateBase;
+                    }
+                }
+                return m_boxColor; 
+            })
+            ->rounding(m_borderRadius)
+            ->borderColor([this] { 
+                if (m_backend) {
+                    auto palette = m_backend->getPalette();
+                    if (palette) {
+                        return palette->m_colors.accent;
+                    }
+                }
+                return m_borderColor; 
+            })
+            ->borderThickness(m_borderThickness)
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                {m_width, m_height}))
+            ->commence();
+    }
+    
+    // Rebuild text with updated properties
+    if (auto builder = m_text->rebuild()) {
+        std::string fontFamilyStr = "Sans Serif";
+        if (m_backend) {
+            auto palette = m_backend->getPalette();
+            if (palette && !palette->m_vars.fontFamily.empty()) {
+                fontFamilyStr = palette->m_vars.fontFamily;
+            }
+        }
+        
+        builder
+            ->text(std::string{m_title})
+            ->color([this] { 
+                if (m_backend) {
+                    auto palette = m_backend->getPalette();
+                    if (palette) {
+                        return palette->m_colors.text;
+                    }
+                }
+                return m_textColor; 
+            })
+            ->fontFamily(std::move(fontFamilyStr))
+            ->align(Hyprtoolkit::HT_FONT_ALIGN_CENTER)
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                {1.0f, 0.1f}))  // Text takes 10% of content height
+            ->commence();
+    }
+    
+    // Update main layout size
+    if (auto builder = m_mainLayout->rebuild()) {
+        builder
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                {m_width - (m_borderThickness * 2), m_height - (m_borderThickness * 2)}))
+            ->commence();
+    }
+    
+    // Update image size and rounding
+    if (auto builder = m_image->rebuild()) {
+        builder
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                {1.0f, 0.9f}))  // Image takes 90% of content height
+            ->rounding(m_borderRadius / 2)
+            ->commence();
+    }
+    
+    updateImage();
+    m_background->forceReposition();
+}
+
+void Box::updateImage() {
+    if (auto builder = m_image->rebuild()) {
+        builder
+            ->path(std::string{m_imagePath})
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                {1.0f, 0.9f}))  // Image takes 90% of content height
+            ->fitMode(Hyprtoolkit::eImageFitMode::IMAGE_FIT_MODE_CONTAIN)
+            ->commence();
+    }
+}
+
+// Setter implementations
+void Box::setTitle(const std::string& newTitle) {
+    m_title = newTitle;
+    updateUI();
+}
+
+void Box::setImagePath(const std::string& newImagePath) {
+    m_imagePath = newImagePath;
+    updateUI();
+}
+
+void Box::setBoxColor(Hyprtoolkit::CHyprColor newColor) {
+    m_boxColor = newColor;
+    updateUI();
+}
+
+void Box::setBorderColor(Hyprtoolkit::CHyprColor newColor) {
+    m_borderColor = newColor;
+    updateUI();
+}
+
+void Box::setTextColor(Hyprtoolkit::CHyprColor newColor) {
+    m_textColor = newColor;
+    updateUI();
+}
+
+void Box::setSize(float newWidth, float newHeight) {
+    m_width = newWidth;
+    m_height = newHeight;
+    updateUI();
+}
+
+void Box::setBorderRadius(int newRadius) {
+    m_borderRadius = newRadius;
+    updateUI();
+}
+
+void Box::setBorderThickness(int newThickness) {
+    m_borderThickness = newThickness;
+    updateUI();
+}
+--- END OF: Box.cpp ---
+
+
+=== Box.hpp ===
+Size: 2594 bytes | Last modified: 2026-02-09 23:24:12
+
+#pragma once
+#include <hyprtoolkit/core/Backend.hpp>
+#include <hyprtoolkit/element/Rectangle.hpp>
+#include <hyprtoolkit/element/Text.hpp>
+#include <hyprtoolkit/element/Image.hpp>
+#include <hyprtoolkit/element/ColumnLayout.hpp>
+#include <hyprutils/memory/SharedPtr.hpp>
+#include <string>
+#include <functional>
+
+class Box {
+  public:
+    // Constructor with all customizable properties
+    Box(Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IBackend> backend,
+        const std::string& title,
+        const std::string& imagePath,
+        Hyprtoolkit::CHyprColor boxColor = {0.15f, 0.15f, 0.15f, 1.0f},
+        Hyprtoolkit::CHyprColor borderColor = {0.2f, 0.5f, 0.8f, 1.0f},
+        Hyprtoolkit::CHyprColor textColor = {1.0f, 1.0f, 1.0f, 1.0f},
+        float width = 220.0f,
+        float height = 220.0f,
+        int borderRadius = 10,
+        int borderThickness = 1);
+        
+        
+    // Getters for the elements
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IElement> getElement() const { return m_background; }
+    float getWidth() const { return m_width; }
+    float getHeight() const { return m_height; }
+    std::string getTitle() const { return m_title; }
+    std::string getImagePath() const { return m_imagePath; }
+    
+    // Setters to modify properties
+    void setTitle(const std::string& newTitle);
+    void setImagePath(const std::string& newImagePath);
+    void setBoxColor(Hyprtoolkit::CHyprColor newColor);
+    void setBorderColor(Hyprtoolkit::CHyprColor newColor);
+    void setTextColor(Hyprtoolkit::CHyprColor newColor);
+    void setSize(float newWidth, float newHeight);
+    void setBorderRadius(int newRadius);
+    void setBorderThickness(int newThickness);
+    
+  private:
+    // Properties
+    std::string m_title;
+    std::string m_imagePath;
+    Hyprtoolkit::CHyprColor m_boxColor;
+    Hyprtoolkit::CHyprColor m_borderColor;
+    Hyprtoolkit::CHyprColor m_textColor;
+    float m_width;
+    float m_height;
+    int m_borderRadius;
+    int m_borderThickness;
+    
+    // UI Elements
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CRectangleElement> m_background;
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CColumnLayoutElement> m_mainLayout;
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CColumnLayoutElement> m_contentLayout;
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CImageElement> m_image;
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CTextElement> m_text;
+     Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IBackend> m_backend;
+    
+    // Helper methods
+    void createUI();
+    void updateUI();
+    void updateImage();
+};
+--- END OF: Box.hpp ---
+
+
+=== GridLayout.cpp ===
+Size: 8903 bytes | Last modified: 2026-02-09 20:07:23
+
+#include "GridLayout.hpp"
+#include <iostream>
+
+GridLayout::GridLayout(Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IBackend> backend,
+                       Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IWindow> window)
+    : m_backend(backend), m_window(window) {
+    
+    if (!m_backend || !m_window) {
+        throw std::runtime_error("GridLayout requires valid backend and window");
+    }
+    
+    createUI();
+    setupResizeHandler();
+}
+
+GridLayout::~GridLayout() {
+    // Listener will be automatically cleaned up when destroyed
+}
+
+void GridLayout::setupResizeHandler() {
+    // Setup window resize handler - use idle callback to avoid recursion
+    m_resizeListener = m_window->m_events.resized.listen([this](Hyprutils::Math::Vector2D newSize) {
+        std::cout << "[GridLayout] Window resized to: " << newSize.x << "x" << newSize.y << std::endl;
+        
+        // Schedule update on next idle to avoid multiple updates during resize
+        if (m_backend) {
+            m_backend->addIdle([this]() {
+                std::cout << "[GridLayout] Processing resize update..." << std::endl;
+                update();
+            });
+        }
+    });
+}
+
+void GridLayout::createUI() {
+    if (m_config.scrollable) {
+        // Create scrollable area
+        m_scrollArea = Hyprtoolkit::CScrollAreaBuilder::begin()
+            ->scrollY(true)
+            ->scrollX(false)
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                {1.0F, 1.0F}))
+            ->commence();
+        
+        // Create grid container inside scroll area
+        m_gridContainer = Hyprtoolkit::CColumnLayoutBuilder::begin()
+            ->gap(0)
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO,
+                {1.0F, 1.0F}))
+            ->commence();
+        
+        m_scrollArea->addChild(m_gridContainer);
+    } else {
+        // Non-scrollable container
+        m_gridContainer = Hyprtoolkit::CColumnLayoutBuilder::begin()
+            ->gap(0)
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                {1.0F, 1.0F}))
+            ->commence();
+    }
+}
+
+void GridLayout::addBox(std::unique_ptr<Box> box) {
+    if (!box) return;
+    
+    m_boxes.push_back(std::move(box));
+    update();
+}
+
+void GridLayout::addBoxes(std::vector<std::unique_ptr<Box>> boxes) {
+    for (auto& box : boxes) {
+        if (box) {
+            m_boxes.push_back(std::move(box));
+        }
+    }
+    update();
+}
+
+void GridLayout::clear() {
+    m_boxes.clear();
+    update();
+}
+
+Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IElement> GridLayout::getElement() {
+    return m_config.scrollable ? 
+           static_cast<Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IElement>>(m_scrollArea) :
+           static_cast<Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IElement>>(m_gridContainer);
+}
+
+void GridLayout::update() {
+    std::cout << "[GridLayout] Updating layout..." << std::endl;
+    calculateLayout();
+    createGridStructure();
+    
+    // Force reposition of all elements
+    if (m_gridContainer) {
+        m_gridContainer->forceReposition();
+    }
+    if (m_scrollArea) {
+        m_scrollArea->forceReposition();
+    }
+}
+
+void GridLayout::setConfig(const Config& newConfig) {
+    m_config = newConfig;
+    
+    // Recreate UI if scrollable setting changed
+    bool needsRecreate = false;
+    if (m_config.scrollable && !m_scrollArea) {
+        needsRecreate = true;
+    } else if (!m_config.scrollable && m_scrollArea) {
+        needsRecreate = true;
+    }
+    
+    if (needsRecreate) {
+        createUI();
+    }
+    
+    update();
+}
+
+void GridLayout::calculateLayout() {
+    if (m_boxes.empty() || !m_window) {
+        m_columnCount = 0;
+        m_rowCount = 0;
+        m_gridWidth = 0.0f;
+        m_gridHeight = 0.0f;
+        std::cout << "[GridLayout] No boxes to layout" << std::endl;
+        return;
+    }
+    
+    // Get window size
+    auto windowSize = m_window->pixelSize();
+    float windowWidth = windowSize.x;
+    
+    // Calculate how many columns can fit
+    float totalWidthPerColumn = m_config.boxSize + m_config.horizontalSpacing;
+    int maxColumns = static_cast<int>(windowWidth / totalWidthPerColumn);
+    
+    // Ensure reasonable bounds
+    int totalBoxes = static_cast<int>(m_boxes.size());
+    m_columnCount = std::max(1, std::min(maxColumns, totalBoxes));
+    
+    // Calculate rows needed (ceiling division)
+    m_rowCount = (totalBoxes + m_columnCount - 1) / m_columnCount;
+    
+    // Calculate grid dimensions
+    m_gridWidth = (m_columnCount * m_config.boxSize) + 
+                  ((m_columnCount - 1) * m_config.horizontalSpacing);
+    m_gridHeight = (m_rowCount * m_config.boxSize) + 
+                   ((m_rowCount - 1) * m_config.verticalSpacing);
+    
+    // Debug output
+    std::cout << "[GridLayout] Layout calculated:" << std::endl;
+    std::cout << "  Window: " << windowWidth << "x" << windowSize.y << std::endl;
+    std::cout << "  Columns: " << m_columnCount << std::endl;
+    std::cout << "  Rows: " << m_rowCount << std::endl;
+    std::cout << "  Grid size: " << m_gridWidth << "x" << m_gridHeight << std::endl;
+    std::cout << "  Total boxes: " << totalBoxes << std::endl;
+}
+
+void GridLayout::createGridStructure() {
+    // Clear existing content
+    m_gridContainer->clearChildren();
+    
+    if (m_boxes.empty()) {
+        std::cout << "[GridLayout] No boxes to create grid" << std::endl;
+        return;
+    }
+    
+    // Create wrapper for centering (if enabled)
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CColumnLayoutElement> gridWrapper;
+    
+    if (m_config.centerHorizontal) {
+        gridWrapper = Hyprtoolkit::CColumnLayoutBuilder::begin()
+            ->gap(0)
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO,
+                {1.0F, 1.0F}))
+            ->commence();
+        
+        gridWrapper->setPositionMode(Hyprtoolkit::IElement::HT_POSITION_AUTO);
+        gridWrapper->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_HCENTER, true);
+        
+        std::cout << "[GridLayout] Grid will be centered horizontally" << std::endl;
+    } else {
+        gridWrapper = m_gridContainer;
+        std::cout << "[GridLayout] Grid will be left-aligned" << std::endl;
+    }
+    
+    // Update vertical spacing
+    if (auto builder = gridWrapper->rebuild()) {
+        builder->gap(m_config.verticalSpacing)->commence();
+    }
+    
+    // Create rows
+    int totalBoxes = static_cast<int>(m_boxes.size());
+    
+    std::cout << "[GridLayout] Creating " << m_rowCount << " rows..." << std::endl;
+    
+    for (int row = 0; row < m_rowCount; ++row) {
+        // Create row layout with exact width
+        auto rowLayout = Hyprtoolkit::CRowLayoutBuilder::begin()
+            ->gap(m_config.horizontalSpacing)
+            ->size(Hyprtoolkit::CDynamicSize(
+                Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO,
+                Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO,
+                {m_gridWidth, m_config.boxSize}))
+            ->commence();
+        
+        // Add boxes to row
+        for (int col = 0; col < m_columnCount; ++col) {
+            int index = (row * m_columnCount) + col;
+            
+            if (index < totalBoxes && m_boxes[index] && m_boxes[index]->getElement()) {
+                rowLayout->addChild(m_boxes[index]->getElement());
+            } else if (index >= totalBoxes) {
+                // Empty placeholder for alignment
+                auto emptySpace = Hyprtoolkit::CRectangleBuilder::begin()
+                    ->color([] { return Hyprtoolkit::CHyprColor(0, 0, 0, 0); })
+                    ->size(Hyprtoolkit::CDynamicSize(
+                        Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                        Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE,
+                        {m_config.boxSize, m_config.boxSize}))
+                    ->commence();
+                rowLayout->addChild(emptySpace);
+            }
+        }
+        
+        // Add row to wrapper
+        gridWrapper->addChild(rowLayout);
+        
+        // Force reposition of row immediately
+        rowLayout->forceReposition();
+    }
+    
+    // Add wrapper to container if centering is enabled
+    if (m_config.centerHorizontal && gridWrapper != m_gridContainer) {
+        m_gridContainer->addChild(gridWrapper);
+    }
+    
+    // Force reposition of entire container
+    m_gridContainer->forceReposition();
+    if (m_scrollArea) {
+        m_scrollArea->forceReposition();
+    }
+    
+    std::cout << "[GridLayout] Grid structure created successfully" << std::endl;
+}
+--- END OF: GridLayout.cpp ---
+
+
+=== GridLayout.hpp ===
+Size: 2741 bytes | Last modified: 2026-02-09 20:06:35
+
+#pragma once
+
+#include "Box.hpp"
+#include <hyprtoolkit/element/ColumnLayout.hpp>
+#include <hyprtoolkit/element/RowLayout.hpp>
+#include <hyprtoolkit/element/ScrollArea.hpp>
+#include <hyprtoolkit/core/Backend.hpp>
+#include <hyprtoolkit/window/Window.hpp>
+#include <vector>
+#include <memory>
+
+class GridLayout {
+  public:
+    // Configuration structure for grid properties
+    struct Config {
+        float boxSize = 220.0f;           // Size of each box (square)
+        float horizontalSpacing = 15.0f;  // Space between columns
+        float verticalSpacing = 15.0f;    // Space between rows
+        bool scrollable = true;           // Enable vertical scrolling
+        bool centerHorizontal = true;     // Center grid horizontally
+    };
+    
+    // Constructor
+    GridLayout(Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IBackend> backend,
+               Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IWindow> window);
+    
+    // Destructor
+    ~GridLayout();
+    
+    // Add a box to the grid
+    void addBox(std::unique_ptr<Box> box);
+    
+    // Add multiple boxes
+    void addBoxes(std::vector<std::unique_ptr<Box>> boxes);
+    
+    // Remove all boxes
+    void clear();
+    
+    // Get the UI element to add to window/layout
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IElement> getElement();
+    
+    // Update grid layout (call when window resizes or boxes change)
+    void update();
+    
+    // Configuration
+    void setConfig(const Config& newConfig);
+    Config getConfig() const { return m_config; }
+    
+    // Getters for grid information
+    int getColumnCount() const { return m_columnCount; }
+    int getRowCount() const { return m_rowCount; }
+    int getTotalBoxes() const { return static_cast<int>(m_boxes.size()); }
+    float getGridWidth() const { return m_gridWidth; }
+    float getGridHeight() const { return m_gridHeight; }
+    
+  private:
+    // Dependencies
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IBackend> m_backend;
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::IWindow> m_window;
+    
+    // Configuration
+    Config m_config;
+    
+    // Box storage
+    std::vector<std::unique_ptr<Box>> m_boxes;
+    
+    // UI Elements
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CScrollAreaElement> m_scrollArea;
+    Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CColumnLayoutElement> m_gridContainer;
+    
+    // Signal listener for window resize
+    Hyprutils::Signal::CHyprSignalListener m_resizeListener;
+    
+    // Grid state
+    int m_columnCount = 0;
+    int m_rowCount = 0;
+    float m_gridWidth = 0.0f;
+    float m_gridHeight = 0.0f;
+    
+    // Private methods
+    void createUI();
+    void calculateLayout();
+    void createGridStructure();
+    void setupResizeHandler();
+};
+--- END OF: GridLayout.hpp ---
+
+
+=== SearchBox.cpp ===
+Size: 3918 bytes | Last modified: 2026-02-10 17:45:17
+
+#include "SearchBox.hpp"
+#include <hyprtoolkit/palette/Palette.hpp>
+#include <hyprtoolkit/window/Window.hpp>  // Add this!
+#include <iostream>
+
+using namespace Hyprtoolkit;
+
+SearchBox::SearchBox(CSharedPointer<IBackend> backend,
+                     CSharedPointer<IWindow> window,
+                     const std::string& hint)
+    : m_backend(backend), m_window(window) {
+    setupUI(hint);
+    setupKeyboardListener();
+}
+
+SearchBox::~SearchBox() {
+    // Cleanup if needed
+}
+
+void SearchBox::setupUI(const std::string& hint) {
+    // Get system palette
+    auto palette = CPalette::palette();
+    
+    // Create root element (background rectangle)
+    m_rootElement = CRectangleBuilder::begin()
+        ->color([palette] {
+            if (palette) {
+                return palette->m_colors.alternateBase;
+            }
+            return CHyprColor(0.1, 0.1, 0.1, 0.95);
+        })
+        ->borderColor([palette] {
+            if (palette) {
+                auto borderColor = palette->m_colors.text;
+                borderColor.a = 0.3;
+                return borderColor;
+            }
+            return CHyprColor(0.3, 0.3, 0.3, 0.5);
+        })
+        ->borderThickness(1)
+        ->rounding(8)
+        ->size(CDynamicSize(CDynamicSize::HT_SIZE_PERCENT,
+                           CDynamicSize::HT_SIZE_ABSOLUTE,
+                           {1.0f, 40.0f}))
+        ->commence();
+    
+    // Create textbox
+    std::string hintCopy = hint;
+    m_textbox = CTextboxBuilder::begin()
+        ->placeholder(std::move(hintCopy))
+        ->defaultText("")
+        ->multiline(false)
+        ->onTextEdited([this](CSharedPointer<CTextboxElement> textbox, const std::string& text) {
+            handleTextChanged(text);
+        })
+        ->size(CDynamicSize(CDynamicSize::HT_SIZE_PERCENT,
+                           CDynamicSize::HT_SIZE_PERCENT,
+                           {1.0f, 1.0f}))
+        ->commence();
+    
+    // Add some margin
+    m_rootElement->setMargin(8);
+    m_rootElement->addChild(m_textbox);
+}
+
+void SearchBox::setupKeyboardListener() {
+    if (!m_window) return;
+    
+    // Listen for keyboard events on the window
+    // Store the listener by assigning it to a member variable
+    m_keyboardListener = std::shared_ptr<void>(
+        new auto(m_window->m_events.keyboardKey.listen([this](const Input::SKeyboardKeyEvent& event) {
+            if (!event.down || event.repeat) return;
+            
+            // Enter key (Return key = 0xFF0D)
+            if (event.xkbKeysym == 0xFF0D) {
+                handleEnterPressed();
+                return;
+            }
+        }))
+    );
+}
+
+void SearchBox::handleTextChanged(const std::string& text) {
+    m_currentText = text;
+    
+    // Call text changed callback
+    if (m_onTextChanged) {
+        m_onTextChanged(text);
+    }
+}
+
+void SearchBox::handleEnterPressed() {
+    // Save current text before any potential modification by Enter key
+    m_pendingSearchText = m_currentText;
+    
+    // Set flag to clear in next idle callback
+    m_shouldClear = true;
+    
+    // Schedule clear for next event loop iteration
+    scheduleClear();
+    
+    // Submit search immediately
+    if (m_onSearchSubmitted && !m_pendingSearchText.empty()) {
+        m_onSearchSubmitted(m_pendingSearchText);
+    }
+}
+
+void SearchBox::scheduleClear() {
+    // Schedule clearing for next event loop
+    if (m_backend) {
+        m_backend->addIdle([this] {
+            performClear();
+        });
+    }
+}
+
+void SearchBox::performClear() {
+    if (m_shouldClear && m_textbox) {
+        // Clear the textbox
+        if (auto builder = m_textbox->rebuild()) {
+            builder->defaultText("")->commence();
+        }
+        
+        // Update internal state
+        m_currentText.clear();
+        m_shouldClear = false;
+        
+        // Trigger text changed callback with empty string
+        if (m_onTextChanged) {
+            m_onTextChanged("");
+        }
+    }
+}
+--- END OF: SearchBox.cpp ---
+
+
+=== SearchBox.hpp ===
+Size: 2095 bytes | Last modified: 2026-02-10 17:45:08
+
+#pragma once
+
+#include <hyprtoolkit/core/Backend.hpp>
+#include <hyprtoolkit/element/Element.hpp>
+#include <hyprtoolkit/element/Textbox.hpp>
+#include <hyprtoolkit/element/Rectangle.hpp>
+#include <functional>
+#include <string>
+#include <memory>
+#include <atomic>
+
+// Forward declaration
+namespace Hyprtoolkit {
+    class IWindow;
+}
+
+using namespace Hyprutils::Memory;
+
+namespace Hyprtoolkit {
+
+class SearchBox {
+public:
+    // Callback types
+    using OnTextChangedCallback = std::function<void(const std::string& text)>;
+    using OnSearchSubmittedCallback = std::function<void(const std::string& text)>;
+    
+    // Constructor - takes window for keyboard events
+    SearchBox(CSharedPointer<IBackend> backend,
+              CSharedPointer<IWindow> window,
+              const std::string& hint = "Search...");
+    
+    ~SearchBox();
+    
+    // Get the root element for adding to layouts
+    CSharedPointer<IElement> getView() const { return m_rootElement; }
+    
+    // Programmatic controls
+    std::string getText() const { return m_currentText; }
+    void focus() { if (m_textbox) m_textbox->focus(true); }
+    
+    // Callback setters
+    void setOnTextChanged(OnTextChangedCallback callback) {
+        m_onTextChanged = callback;
+    }
+    
+    void setOnSearchSubmitted(OnSearchSubmittedCallback callback) {
+        m_onSearchSubmitted = callback;
+    }
+    
+private:
+    void setupUI(const std::string& hint);
+    void setupKeyboardListener();
+    void handleTextChanged(const std::string& text);
+    void handleEnterPressed();
+    void scheduleClear();
+    void performClear();
+    
+    // Member variables
+    CSharedPointer<IBackend> m_backend;
+    CSharedPointer<IWindow> m_window;
+    CSharedPointer<CRectangleElement> m_rootElement;
+    CSharedPointer<CTextboxElement> m_textbox;
+    std::shared_ptr<void> m_keyboardListener; // Store listener
+    std::string m_currentText;
+    std::string m_pendingSearchText;
+    std::atomic<bool> m_shouldClear{false};
+    OnTextChangedCallback m_onTextChanged;
+    OnSearchSubmittedCallback m_onSearchSubmitted;
+};
+
+} // namespace Hyprtoolkit
+--- END OF: SearchBox.hpp ---
+
+

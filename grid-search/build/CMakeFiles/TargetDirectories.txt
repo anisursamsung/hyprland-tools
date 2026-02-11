@@ -1,0 +1,7 @@
+/home/anisur/Projects/hyprland-tools/grid-search/build/CMakeFiles/grid-search.dir
+/home/anisur/Projects/hyprland-tools/grid-search/build/CMakeFiles/edit_cache.dir
+/home/anisur/Projects/hyprland-tools/grid-search/build/CMakeFiles/rebuild_cache.dir
+/home/anisur/Projects/hyprland-tools/grid-search/build/CMakeFiles/list_install_components.dir
+/home/anisur/Projects/hyprland-tools/grid-search/build/CMakeFiles/install.dir
+/home/anisur/Projects/hyprland-tools/grid-search/build/CMakeFiles/install/local.dir
+/home/anisur/Projects/hyprland-tools/grid-search/build/CMakeFiles/install/strip.dir

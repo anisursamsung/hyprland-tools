@@ -1,0 +1,143 @@
+Yes, you can definitely use your `Box` class in other projects! It's well-encapsulated. Here's how:
+
+## **Files you need to copy:**
+1. `Box.hpp` - Header file
+2. `Box.cpp` - Implementation file
+3. `GridLayout.hpp` - Optional, if you want the grid layout too
+4. `GridLayout.cpp` - Optional, if you want the grid layout too
+
+## **Basic usage in a new project:**
+
+### **1. Simple standalone Box usage:**
+```cpp
+#include <hyprtoolkit/core/Backend.hpp>
+#include <hyprtoolkit/window/Window.hpp>
+#include "Box.hpp"  // Your Box class
+#include <memory>
+
+int main() {
+    // 1. Create backend
+    auto backend = Hyprtoolkit::IBackend::create();
+    
+    // 2. Create window
+    auto window = Hyprtoolkit::CWindowBuilder::begin()
+        ->type(Hyprtoolkit::HT_WINDOW_TOPLEVEL)
+        ->appTitle("My App")
+        ->commence();
+    
+    // 3. Create a single Box
+    auto myBox = std::make_unique<Box>(
+        backend,
+        "My Image",                     // Title
+        "/path/to/image.jpg",           // Image path
+        Hyprtoolkit::CHyprColor(0.1f, 0.1f, 0.1f, 1.0f),  // Box color
+        Hyprtoolkit::CHyprColor(0.8f, 0.2f, 0.2f, 1.0f),  // Border color (red)
+        Hyprtoolkit::CHyprColor(1.0f, 1.0f, 1.0f, 1.0f),  // Text color (white)
+        300.0f, 300.0f,                 // Width, Height
+        15, 3                           // Border radius, thickness
+    );
+    
+    // 4. Add to window
+    window->m_rootElement = myBox->getElement();
+    
+    // 5. Open window and run
+    window->open();
+    backend->enterLoop();
+    
+    return 0;
+}
+```
+
+### **2. Using multiple Boxes with simple layout:**
+```cpp
+// Create a column layout for multiple boxes
+auto mainLayout = Hyprtoolkit::CColumnLayoutBuilder::begin()
+    ->gap(20)
+    ->size(Hyprtoolkit::CDynamicSize(
+        Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+        Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT,
+        {1.0f, 1.0f}))
+    ->commence();
+
+// Create multiple boxes
+std::vector<std::unique_ptr<Box>> boxes;
+
+boxes.push_back(std::make_unique<Box>(backend, "Image 1", "img1.jpg",
+    Hyprtoolkit::CHyprColor(0.15f, 0.15f, 0.15f, 1.0f),
+    Hyprtoolkit::CHyprColor(0.2f, 0.5f, 0.8f, 1.0f),
+    Hyprtoolkit::CHyprColor(1.0f, 1.0f, 1.0f, 1.0f),
+    250.0f, 250.0f, 10, 2));
+
+boxes.push_back(std::make_unique<Box>(backend, "Image 2", "img2.jpg",
+    Hyprtoolkit::CHyprColor(0.15f, 0.15f, 0.15f, 1.0f),
+    Hyprtoolkit::CHyprColor(0.8f, 0.3f, 0.3f, 1.0f),  // Different border color
+    Hyprtoolkit::CHyprColor(1.0f, 1.0f, 1.0f, 1.0f),
+    250.0f, 250.0f, 10, 2));
+
+// Add all boxes to layout
+for (auto& box : boxes) {
+    mainLayout->addChild(box->getElement());
+}
+
+// Set as window root
+window->m_rootElement = mainLayout;
+```
+
+### **3. Using with GridLayout (copy all 4 files):**
+```cpp
+#include "Box.hpp"
+#include "GridLayout.hpp"
+#include <vector>
+
+// ... create backend and window ...
+
+// Create grid layout
+auto grid = std::make_unique<GridLayout>(backend, window);
+
+// Configure grid
+GridLayout::Config config;
+config.boxSize = 200.0f;
+config.horizontalSpacing = 20.0f;
+config.verticalSpacing = 20.0f;
+config.scrollable = true;
+config.centerHorizontal = true;
+grid->setConfig(config);
+
+// Create and add boxes
+std::vector<std::unique_ptr<Box>> boxes;
+
+// Add multiple boxes
+for (int i = 0; i < 10; i++) {
+    boxes.push_back(std::make_unique<Box>(
+        backend,
+        "Image " + std::to_string(i+1),
+        "/path/to/image" + std::to_string(i+1) + ".jpg",
+        // ... colors, size, etc.
+    ));
+}
+
+grid->addBoxes(std::move(boxes));
+
+// Add grid to window
+window->m_rootElement = grid->getElement();
+```
+
+## **Build command:**
+```bash
+g++ -std=c++20 -I/path/to/hyprtoolkit/include -I. main.cpp Box.cpp GridLayout.cpp \
+    -lhyprtoolkit -lhyprgraphics -lhyprutils -o myapp
+```
+
+## **What makes your Box reusable:**
+✅ **Encapsulated** - All UI logic hidden inside Box class  
+✅ **Configurable** - All properties can be set via constructor/setters  
+✅ **Independent** - Only depends on Hyprtoolkit, not on your specific app logic  
+✅ **Portable** - No hardcoded paths or project-specific dependencies  
+
+## **If you want to make it even more reusable:**
+1. Put Box and GridLayout in their own namespace
+2. Add CMakeLists.txt for easy integration
+3. Create a simple example project
+4. Add doxygen comments for documentation
+
+Your Box is already production-ready for reuse!

@@ -1,0 +1,7 @@
+/home/anisur/Projects/hyprland-tools/search-example/build/CMakeFiles/search-example.dir
+/home/anisur/Projects/hyprland-tools/search-example/build/CMakeFiles/edit_cache.dir
+/home/anisur/Projects/hyprland-tools/search-example/build/CMakeFiles/rebuild_cache.dir
+/home/anisur/Projects/hyprland-tools/search-example/build/CMakeFiles/list_install_components.dir
+/home/anisur/Projects/hyprland-tools/search-example/build/CMakeFiles/install.dir
+/home/anisur/Projects/hyprland-tools/search-example/build/CMakeFiles/install/local.dir
+/home/anisur/Projects/hyprland-tools/search-example/build/CMakeFiles/install/strip.dir
